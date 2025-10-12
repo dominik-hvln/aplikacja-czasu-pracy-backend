@@ -57,17 +57,32 @@ export class AuthService {
     async login(loginDto: LoginDto) {
         const supabase = this.supabaseService.getClient();
 
-        const { data, error } = await supabase.auth.signInWithPassword({
+        const { data, error: authError } = await supabase.auth.signInWithPassword({ // <-- Zmienna nazywa się 'data'
             email: loginDto.email,
             password: loginDto.password,
         });
 
-        if (error) {
-            // Jeśli Supabase zwróci błąd (np. złe hasło), rzucamy wyjątek 401 Unauthorized
+        if (authError) {
             throw new UnauthorizedException('Niepoprawny adres e-mail lub hasło.');
         }
 
-        // Jeśli logowanie się powiedzie, zwracamy dane sesji (w tym tokeny JWT)
-        return data.session;
+        // Upewniamy się, że dane istnieją
+        if (!data.session || !data.user) {
+            throw new InternalServerErrorException('Błąd podczas logowania.');
+        }
+
+        // ✅ POPRAWKA 1: Używamy 'data' zamiast 'sessionData'
+        const { data: profile, error: profileError } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', data.user.id) // <-- ZMIANA TUTAJ
+            .single();
+
+        if (profileError || !profile) {
+            throw new InternalServerErrorException('Nie udało się pobrać profilu użytkownika.');
+        }
+
+        // ✅ POPRAWKA 2: Używamy 'data' zamiast 'sessionData'
+        return { session: data.session, profile: profile }; // <-- ZMIANA TUTAJ
     }
 }
