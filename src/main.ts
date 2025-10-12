@@ -8,8 +8,20 @@ async function bootstrap() {
 
     app.useGlobalPipes(new ValidationPipe());
 
+    // ✅ ZAKTUALIZOWANA KONFIGURACJA CORS
+    const whitelist = [
+        'http://localhost:3000',
+        'https://localhost',
+    ];
+
     app.enableCors({
-        origin: 'http://localhost:3000',
+        origin: function (origin, callback) {
+            if (!origin || whitelist.indexOf(origin) !== -1) {
+                callback(null, true);
+            } else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
         methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
         credentials: true,
     });
