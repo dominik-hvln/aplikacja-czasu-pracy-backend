@@ -12,6 +12,7 @@ async function bootstrap() {
     const whitelist = [
         'http://localhost:3000',
         'https://localhost',
+        'capacitor://localhost',
     ];
 
     app.enableCors({
