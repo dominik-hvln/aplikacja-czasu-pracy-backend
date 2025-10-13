@@ -8,6 +8,7 @@ import { ProjectsModule } from './projects/projects.module';
 import { SuperAdminModule } from './super-admin/super-admin.module';
 import { TimeEntriesModule } from './time-entries/time-entries.module';
 import { UsersModule } from './users/users.module';
+import { TasksModule } from './tasks/tasks.module';
 
 @Module({
     imports: [
@@ -20,6 +21,7 @@ import { UsersModule } from './users/users.module';
         SuperAdminModule,
         TimeEntriesModule,
         UsersModule,
+        TasksModule,
     ],
     controllers: [AppController],
     providers: [AppService],
