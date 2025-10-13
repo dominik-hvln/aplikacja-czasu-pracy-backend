@@ -29,7 +29,6 @@ export class TimeEntriesService {
         }
 
         if (lastEntry) {
-            // Zamykanie ostatniego wpisu (Clock-out)
             const { data: updatedEntry, error: updateError } = await supabase
                 .from('time_entries')
                 .update({ end_time: new Date().toISOString(), end_gps_location: gpsLocationString })
@@ -39,7 +38,6 @@ export class TimeEntriesService {
             if (updateError) throw new InternalServerErrorException(updateError.message);
             return { status: 'clock_out', entry: updatedEntry };
         } else {
-            // Otwieranie nowego wpisu (Clock-in)
             const { data: newEntry, error: insertError } = await supabase
                 .from('time_entries')
                 .insert({
