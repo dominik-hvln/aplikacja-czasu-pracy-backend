@@ -13,67 +13,85 @@ export class TimeEntriesService {
         timestamp?: string,
     ) {
         const supabase = this.supabaseService.getClient();
-        const eventTime = timestamp ? new Date(timestamp).toISOString() : new Date().toISOString();
-        const gpsLocationString = location ? `(${location.longitude},${location.latitude})` : null;
 
-        // Krok 1: Znajdź task (i jego projekt nadrzędny) na podstawie kodu QR.
-        const { data: qrCode, error: qrError } = await supabase
-            .from('qr_codes')
-            .select('task:tasks(id, project_id)')
-            .eq('code_value', qrCodeValue)
-            .single();
+        try {
+            const eventTime = timestamp ? new Date(timestamp).toISOString() : new Date().toISOString();
+            const gpsLocationString = location ? `(${location.longitude},${location.latitude})` : null;
 
-        if (qrError || !qrCode || !Array.isArray(qrCode.task) || qrCode.task.length === 0) {
-            throw new NotFoundException('Nie znaleziono zlecenia (taska) dla tego kodu QR.');
-        }
-        const task = qrCode.task[0];
-        const taskId = task.id;
-        const projectId = task.project_id;
-
-        // Krok 2: Sprawdź, czy użytkownik ma już jakiś niezakończony wpis.
-        const { data: lastEntry, error: lastEntryError } = await supabase
-            .from('time_entries')
-            .select('*')
-            .eq('user_id', userId)
-            .is('end_time', null) // Szukamy wpisu bez daty zakończenia
-            .single();
-
-        // Ignorujemy błąd, gdy po prostu nie znaleziono żadnego wpisu.
-        if (lastEntryError && lastEntryError.code !== 'PGRST116') {
-            throw new InternalServerErrorException(lastEntryError.message);
-        }
-
-        // Krok 3: Główna logika biznesowa
-        if (lastEntry) {
-            // SCENARIUSZ A: Użytkownik ma już aktywny wpis.
-
-            // Najpierw zamykamy ten aktywny wpis.
-            const { data: closedEntry, error: closeError } = await supabase
-                .from('time_entries')
-                .update({
-                    end_time: eventTime,
-                    end_gps_location: gpsLocationString
-                })
-                .eq('id', lastEntry.id)
-                .select()
+            // ✅ KROK 1: Znajdź `task_id` na podstawie samego kodu QR.
+            const { data: qrCodeData, error: qrError } = await supabase
+                .from('qr_codes')
+                .select('task_id')
+                .eq('code_value', qrCodeValue)
                 .single();
 
-            if (closeError) {
-                throw new InternalServerErrorException(closeError.message);
+            if (qrError || !qrCodeData?.task_id) {
+                throw new NotFoundException(`Nie znaleziono aktywnego zlecenia dla zeskanowanego kodu QR.`);
+            }
+            const taskId = qrCodeData.task_id;
+
+            // ✅ KROK 2: Pobierz szczegóły taska, w tym `project_id`.
+            const { data: taskData, error: taskError } = await supabase
+                .from('tasks')
+                .select('id, project_id')
+                .eq('id', taskId)
+                .single();
+
+            if (taskError || !taskData?.project_id) {
+                throw new NotFoundException(`Szczegóły zlecenia o ID ${taskId} nie mogły zostać odnalezione.`);
+            }
+            const projectId = taskData.project_id;
+
+            // Krok 3: Sprawdź, czy użytkownik ma już jakiś niezakończony wpis.
+            const { data: lastEntry, error: lastEntryError } = await supabase
+                .from('time_entries')
+                .select('*')
+                .eq('user_id', userId)
+                .is('end_time', null)
+                .single();
+
+            if (lastEntryError && lastEntryError.code !== 'PGRST116') {
+                throw new InternalServerErrorException(lastEntryError.message);
             }
 
-            // Sprawdzamy, czy zeskanowany kod dotyczy TEGO SAMEGO zadania.
-            if (lastEntry.task_id === taskId) {
-                // Jeśli tak, to jest to zwykłe "Zakończenie Pracy" (Clock-out).
-                return { status: 'clock_out', entry: closedEntry };
+            // Krok 4: Główna logika biznesowa (pozostaje bez zmian, ale teraz jest bezpieczniejsza)
+            if (lastEntry) {
+                const { data: closedEntry, error: closeError } = await supabase
+                    .from('time_entries')
+                    .update({ end_time: eventTime, end_gps_location: gpsLocationString })
+                    .eq('id', lastEntry.id)
+                    .select()
+                    .single();
+
+                if (closeError) throw new InternalServerErrorException(closeError.message);
+
+                if (lastEntry.task_id === taskId) {
+                    return { status: 'clock_out', entry: closedEntry };
+                } else {
+                    const { data: newEntry, error: insertError } = await supabase
+                        .from('time_entries')
+                        .insert({
+                            user_id: userId,
+                            project_id: projectId,
+                            task_id: taskId,
+                            company_id: companyId,
+                            start_time: eventTime,
+                            start_gps_location: gpsLocationString,
+                            is_offline_entry: !!timestamp,
+                        })
+                        .select()
+                        .single();
+
+                    if (insertError) throw new InternalServerErrorException(insertError.message);
+                    return { status: 'job_change', closedEntry: closedEntry, newEntry: newEntry };
+                }
             } else {
-                // Jeśli nie, to jest to "Zmiana Zlecenia". Musimy od razu otworzyć nowy wpis.
                 const { data: newEntry, error: insertError } = await supabase
                     .from('time_entries')
                     .insert({
                         user_id: userId,
-                        project_id: projectId, // ID projektu nadrzędnego
-                        task_id: taskId,       // ID nowego zadania
+                        project_id: projectId,
+                        task_id: taskId,
                         company_id: companyId,
                         start_time: eventTime,
                         start_gps_location: gpsLocationString,
@@ -82,32 +100,12 @@ export class TimeEntriesService {
                     .select()
                     .single();
 
-                if (insertError) {
-                    throw new InternalServerErrorException(insertError.message);
-                }
-                return { status: 'job_change', closedEntry: closedEntry, newEntry: newEntry };
+                if (insertError) throw new InternalServerErrorException(insertError.message);
+                return { status: 'clock_in', entry: newEntry };
             }
-        } else {
-            // SCENARIUSZ B: Użytkownik nie ma żadnego aktywnego wpisu.
-            // To jest proste "Rozpoczęcie Pracy" (Clock-in).
-            const { data: newEntry, error: insertError } = await supabase
-                .from('time_entries')
-                .insert({
-                    user_id: userId,
-                    project_id: projectId, // ID projektu nadrzędnego
-                    task_id: taskId,       // ID nowego zadania
-                    company_id: companyId,
-                    start_time: eventTime,
-                    start_gps_location: gpsLocationString,
-                    is_offline_entry: !!timestamp,
-                })
-                .select()
-                .single();
-
-            if (insertError) {
-                throw new InternalServerErrorException(insertError.message);
-            }
-            return { status: 'clock_in', entry: newEntry };
+        } catch (error) {
+            console.error('Błąd w handleScan:', error.message);
+            throw error;
         }
     }
 
@@ -116,30 +114,21 @@ export class TimeEntriesService {
         filters: { dateFrom?: string; dateTo?: string; userId?: string },
     ) {
         const supabase = this.supabaseService.getClient();
-
         let query = supabase
             .from('time_entries')
-            // To jest magia Supabase: pobieramy od razu dane z połączonych tabel!
             .select(`
-        id,
-        start_time,
-        end_time,
-        user:users ( first_name, last_name ),
-        project:projects ( name ),
-        task:tasks ( name )
-      `)
+                id,
+                start_time,
+                end_time,
+                user:users ( first_name, last_name ),
+                project:projects ( name ),
+                task:tasks ( name )
+            `)
             .eq('company_id', companyId);
 
-        // Dynamicznie dodajemy filtry, jeśli zostały podane
-        if (filters.dateFrom) {
-            query = query.gte('start_time', filters.dateFrom);
-        }
-        if (filters.dateTo) {
-            query = query.lte('start_time', filters.dateTo);
-        }
-        if (filters.userId) {
-            query = query.eq('user_id', filters.userId);
-        }
+        if (filters.dateFrom) query = query.gte('start_time', filters.dateFrom);
+        if (filters.dateTo) query = query.lte('start_time', filters.dateTo);
+        if (filters.userId) query = query.eq('user_id', filters.userId);
 
         const { data, error } = await query.order('start_time', { ascending: false });
 

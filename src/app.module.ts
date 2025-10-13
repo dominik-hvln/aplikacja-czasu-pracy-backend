@@ -12,8 +12,6 @@ import { TasksModule } from './tasks/tasks.module';
 
 @Module({
     imports: [
-        // Konfiguruje wczytywanie zmiennych środowiskowych z pliku .env
-        // isGlobal: true sprawia, że są one dostępne w całej aplikacji
         ConfigModule.forRoot({ isGlobal: true }),
         SupabaseModule,
         AuthModule,
