@@ -110,4 +110,42 @@ export class TimeEntriesService {
             return { status: 'clock_in', entry: newEntry };
         }
     }
+
+    async findAllForCompany(
+        companyId: string,
+        filters: { dateFrom?: string; dateTo?: string; userId?: string },
+    ) {
+        const supabase = this.supabaseService.getClient();
+
+        let query = supabase
+            .from('time_entries')
+            // To jest magia Supabase: pobieramy od razu dane z połączonych tabel!
+            .select(`
+        id,
+        start_time,
+        end_time,
+        user:users ( first_name, last_name ),
+        project:projects ( name ),
+        task:tasks ( name )
+      `)
+            .eq('company_id', companyId);
+
+        // Dynamicznie dodajemy filtry, jeśli zostały podane
+        if (filters.dateFrom) {
+            query = query.gte('start_time', filters.dateFrom);
+        }
+        if (filters.dateTo) {
+            query = query.lte('start_time', filters.dateTo);
+        }
+        if (filters.userId) {
+            query = query.eq('user_id', filters.userId);
+        }
+
+        const { data, error } = await query.order('start_time', { ascending: false });
+
+        if (error) {
+            throw new InternalServerErrorException(error.message);
+        }
+        return data;
+    }
 }
