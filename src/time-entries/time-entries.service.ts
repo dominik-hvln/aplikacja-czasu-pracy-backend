@@ -9,10 +9,12 @@ export class TimeEntriesService {
         userId: string,
         companyId: string,
         qrCodeValue: string,
-        location?: { latitude: number; longitude: number }
+        location?: { latitude: number; longitude: number },
+        timestamp?: string
     ) {
         const supabase = this.supabaseService.getClient();
         const gpsLocationString = location ? `(${location.longitude},${location.latitude})` : null;
+        const eventTime = timestamp ? new Date(timestamp).toISOString() : new Date().toISOString();
 
         const { data: qrCode, error: qrError } = await supabase
             .from('qr_codes').select('project_id').eq('code_value', qrCodeValue).single();
@@ -31,7 +33,7 @@ export class TimeEntriesService {
         if (lastEntry) {
             const { data: updatedEntry, error: updateError } = await supabase
                 .from('time_entries')
-                .update({ end_time: new Date().toISOString(), end_gps_location: gpsLocationString })
+                .update({ end_time: eventTime, end_gps_location: gpsLocationString })
                 .eq('id', lastEntry.id)
                 .select().single();
 
@@ -44,8 +46,9 @@ export class TimeEntriesService {
                     user_id: userId,
                     project_id: projectId,
                     company_id: companyId,
-                    start_time: new Date().toISOString(),
+                    start_time: eventTime,
                     start_gps_location: gpsLocationString,
+                    is_offline_entry: !!timestamp
                 })
                 .select().single();
 
