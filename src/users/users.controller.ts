@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Post, Get, Body, UseGuards, Req } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { AuthGuard } from '@nestjs/passport';
@@ -16,5 +16,12 @@ export class UsersController {
         // Nowy pracownik jest zawsze przypisany do firmy admina, który go tworzy
         const companyId = req.user.company_id;
         return this.usersService.create(createUserDto, companyId);
+    }
+
+    @Get()
+    @Roles(Role.Admin, Role.Manager)
+    findAll(@Req() req) {
+        const companyId = req.user.company_id;
+        return this.usersService.findAllForCompany(companyId);
     }
 }

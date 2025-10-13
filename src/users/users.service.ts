@@ -9,7 +9,6 @@ export class UsersService {
     async create(createUserDto: CreateUserDto, companyId: string) {
         const supabase = this.supabaseService.getClient();
 
-        // Krok 1: Stwórz użytkownika w systemie Supabase Auth (jako admin)
         const { data: authData, error: authError } = await supabase.auth.admin.createUser({
             email: createUserDto.email,
             password: createUserDto.password,
@@ -42,5 +41,18 @@ export class UsersService {
         }
 
         return profileData;
+    }
+
+    async findAllForCompany(companyId: string) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('company_id', companyId);
+
+        if (error) {
+            throw new InternalServerErrorException(error.message);
+        }
+        return data;
     }
 }
