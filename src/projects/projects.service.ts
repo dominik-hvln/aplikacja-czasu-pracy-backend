@@ -35,6 +35,18 @@ export class ProjectsService {
         return data;
     }
 
+    async findOne(id: string, companyId: string) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('projects')
+            .select('*')
+            .eq('id', id)
+            .eq('company_id', companyId)
+            .single();
+        if (error) throw new NotFoundException(`Project with ID ${id} not found.`);
+        return data;
+    }
+
     async generateQrCode(projectId: string) {
         const supabase = this.supabaseService.getClient();
         // Sprawdzamy, czy kod już istnieje, aby uniknąć duplikatów

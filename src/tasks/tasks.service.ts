@@ -16,4 +16,15 @@ export class TasksService {
         if (error) throw new InternalServerErrorException(error.message);
         return data;
     }
+
+    async findAllForProject(projectId: string, companyId: string) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('project_id', projectId)
+            .eq('company_id', companyId);
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
 }

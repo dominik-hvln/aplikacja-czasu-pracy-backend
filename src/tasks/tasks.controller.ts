@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Req, Param } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Req, Param, Get } from '@nestjs/common';
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { AuthGuard } from '@nestjs/passport';
@@ -19,5 +19,11 @@ export class TasksController {
     ) {
         const companyId = req.user.company_id;
         return this.tasksService.create(createTaskDto, projectId, companyId);
+    }
+
+    @Get()
+    findAll(@Param('projectId') projectId: string, @Req() req) {
+        const companyId = req.user.company_id;
+        return this.tasksService.findAllForProject(projectId, companyId);
     }
 }

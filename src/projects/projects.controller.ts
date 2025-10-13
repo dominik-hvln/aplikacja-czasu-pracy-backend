@@ -26,4 +26,11 @@ export class ProjectsController {
     generateQrCode(@Param('id') projectId: string) {
         return this.projectsService.generateQrCode(projectId);
     }
+
+    @Get(':id')
+    @Roles(Role.Admin, Role.Manager)
+    findOne(@Param('id') id: string, @Req() req) {
+        const companyId = req.user.company_id;
+        return this.projectsService.findOne(id, companyId);
+    }
 }
