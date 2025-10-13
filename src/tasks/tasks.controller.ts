@@ -26,4 +26,9 @@ export class TasksController {
         const companyId = req.user.company_id;
         return this.tasksService.findAllForProject(projectId, companyId);
     }
+
+    @Post(':taskId/qr-code')
+    generateQrCode(@Param('taskId') taskId: string) {
+        return this.tasksService.generateQrCode(taskId);
+    }
 }

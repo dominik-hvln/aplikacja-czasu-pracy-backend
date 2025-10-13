@@ -27,4 +27,20 @@ export class TasksService {
         if (error) throw new InternalServerErrorException(error.message);
         return data;
     }
+
+    async generateQrCode(taskId: string) {
+        const supabase = this.supabaseService.getClient();
+        // Sprawdzamy, czy kod już istnieje
+        const { data: existingCode } = await supabase
+            .from('qr_codes').select('code_value').eq('task_id', taskId).single();
+
+        if (existingCode) return existingCode;
+
+        // Jeśli nie, tworzymy nowy
+        const { data, error } = await supabase
+            .from('qr_codes').insert({ task_id: taskId }).select('code_value').single();
+
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
 }
