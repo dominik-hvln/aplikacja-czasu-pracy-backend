@@ -6,6 +6,7 @@ import { SupabaseModule } from './supabase/supabase.module';
 import { AuthModule } from './auth/auth.module';
 import { ProjectsModule } from './projects/projects.module';
 import { SuperAdminModule } from './super-admin/super-admin.module';
+import { TimeEntriesModule } from './time-entries/time-entries.module';
 
 @Module({
     imports: [
@@ -16,6 +17,7 @@ import { SuperAdminModule } from './super-admin/super-admin.module';
         AuthModule,
         ProjectsModule,
         SuperAdminModule,
+        TimeEntriesModule,
     ],
     controllers: [AppController],
     providers: [AppService],
