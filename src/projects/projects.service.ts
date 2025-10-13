@@ -34,4 +34,34 @@ export class ProjectsService {
         }
         return data;
     }
+
+    async generateQrCode(projectId: string) {
+        const supabase = this.supabaseService.getClient();
+        // Sprawdzamy, czy kod już istnieje, aby uniknąć duplikatów
+        const { data: existingCode, error: findError } = await supabase
+            .from('qr_codes')
+            .select('code_value')
+            .eq('project_id', projectId)
+            .single();
+
+        if (existingCode) {
+            return existingCode;
+        }
+
+        if (findError && findError.code !== 'PGRST116') { // Ignoruj błąd 'not found'
+            throw new InternalServerErrorException(findError.message);
+        }
+
+        // Jeśli nie istnieje, tworzymy nowy
+        const { data, error } = await supabase
+            .from('qr_codes')
+            .insert({ project_id: projectId })
+            .select('code_value')
+            .single();
+
+        if (error) {
+            throw new InternalServerErrorException(error.message);
+        }
+        return data;
+    }
 }
