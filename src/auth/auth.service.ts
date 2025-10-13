@@ -42,6 +42,7 @@ export class AuthService {
                 first_name: registerDto.firstName,
                 last_name: registerDto.lastName,
                 role: 'admin',
+                email: registerDto.email
             });
 
             if (profileError) throw profileError;
@@ -82,7 +83,6 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się pobrać profilu użytkownika.');
         }
 
-        // ✅ POPRAWKA 2: Używamy 'data' zamiast 'sessionData'
         return { session: data.session, profile: profile }; // <-- ZMIANA TUTAJ
     }
 }

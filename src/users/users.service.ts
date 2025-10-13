@@ -31,6 +31,7 @@ export class UsersService {
                 first_name: createUserDto.firstName,
                 last_name: createUserDto.lastName,
                 role: createUserDto.role,
+                email: createUserDto.email,
             })
             .select()
             .single();
