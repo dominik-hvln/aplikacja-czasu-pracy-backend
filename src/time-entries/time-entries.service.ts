@@ -119,11 +119,12 @@ export class TimeEntriesService {
             .from('time_entries')
             .select(`
                 id,
-                start_time,
-                end_time,
-                user:users ( first_name, last_name ),
-                project:projects ( name ),
-                task:tasks ( name )
+              start_time,
+              end_time,
+              was_edited, 
+              user:users ( first_name, last_name ),
+              project:projects ( name ),
+              task:tasks ( name )
             `)
             .eq('company_id', companyId);
 
