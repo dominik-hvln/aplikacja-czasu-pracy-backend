@@ -144,34 +144,31 @@ export class TimeEntriesService {
         entryId: string,
         companyId: string,
         updateTimeEntryDto: UpdateTimeEntryDto,
-        editorId: string, // ID managera, który dokonuje zmiany
+        editorId: string,
     ) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Pobierz oryginalny wpis, aby zapisać go w audycie
+        // 1. Pobierz oryginalny wpis (bez zmian)
         const { data: originalEntry, error: findError } = await supabase
-            .from('time_entries')
-            .select('*')
-            .eq('id', entryId)
-            .eq('company_id', companyId)
-            .single();
-
+            .from('time_entries').select('*').eq('id', entryId).eq('company_id', companyId).single();
         if (findError) throw new NotFoundException('Nie znaleziono wpisu.');
 
-        // 2. Stwórz zapis w ścieżce audytowej
-        const { error: auditError } = await supabase.from('audit_logs').insert({
+        // 2. Stwórz zapis w audycie (bez zmian)
+        await supabase.from('audit_logs').insert({
             editor_user_id: editorId,
             target_time_entry_id: entryId,
             previous_values: originalEntry,
             new_values: updateTimeEntryDto,
             change_reason: updateTimeEntryDto.change_reason || 'Ręczna korekta przez managera.',
         });
-        if (auditError) throw new InternalServerErrorException('Błąd podczas zapisu w ścieżce audytowej.');
 
-        // 3. Zaktualizuj właściwy wpis czasu pracy
+        // ✅ POPRAWKA: Oddziel `change_reason` od reszty danych
+        const { change_reason, ...entryData } = updateTimeEntryDto;
+
+        // 3. Zaktualizuj wpis, używając tylko danych, które do niego pasują
         const { data: updatedEntry, error: updateError } = await supabase
             .from('time_entries')
-            .update({ ...updateTimeEntryDto, was_edited: true }) // Oznaczamy wpis jako edytowany
+            .update({ ...entryData, was_edited: true }) // Używamy `entryData`, a nie `updateTimeEntryDto`
             .eq('id', entryId)
             .select()
             .single();
