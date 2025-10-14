@@ -140,7 +140,7 @@ export class TimeEntriesService {
                 start_time,
                 end_time,
                 was_edited,
-                is_outside_geofence, // Dodajemy nowe pole do selekcji
+                is_outside_geofence,
                 user:users ( first_name, last_name ),
                 project:projects ( name ),
                 task:tasks ( name )
