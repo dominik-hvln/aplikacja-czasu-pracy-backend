@@ -1,5 +1,6 @@
 import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import {UpdateTimeEntryDto} from "./dto/update-time-entry.dto";
 
 @Injectable()
 export class TimeEntriesService {
@@ -136,5 +137,78 @@ export class TimeEntriesService {
             throw new InternalServerErrorException(error.message);
         }
         return data;
+    }
+
+    async update(
+        entryId: string,
+        companyId: string,
+        updateTimeEntryDto: UpdateTimeEntryDto,
+        editorId: string, // ID managera, który dokonuje zmiany
+    ) {
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Pobierz oryginalny wpis, aby zapisać go w audycie
+        const { data: originalEntry, error: findError } = await supabase
+            .from('time_entries')
+            .select('*')
+            .eq('id', entryId)
+            .eq('company_id', companyId)
+            .single();
+
+        if (findError) throw new NotFoundException('Nie znaleziono wpisu.');
+
+        // 2. Stwórz zapis w ścieżce audytowej
+        const { error: auditError } = await supabase.from('audit_logs').insert({
+            editor_user_id: editorId,
+            target_time_entry_id: entryId,
+            previous_values: originalEntry,
+            new_values: updateTimeEntryDto,
+            change_reason: 'Ręczna korekta przez managera.', // W przyszłości można to rozbudować
+        });
+        if (auditError) throw new InternalServerErrorException('Błąd podczas zapisu w ścieżce audytowej.');
+
+        // 3. Zaktualizuj właściwy wpis czasu pracy
+        const { data: updatedEntry, error: updateError } = await supabase
+            .from('time_entries')
+            .update({ ...updateTimeEntryDto, was_edited: true }) // Oznaczamy wpis jako edytowany
+            .eq('id', entryId)
+            .select()
+            .single();
+
+        if (updateError) throw new InternalServerErrorException(updateError.message);
+        return updatedEntry;
+    }
+
+    async remove(entryId: string, companyId: string, editorId: string) {
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Pobierz wpis, który ma być usunięty
+        const { data: entryToDelete, error: findError } = await supabase
+            .from('time_entries')
+            .select('*')
+            .eq('id', entryId)
+            .eq('company_id', companyId)
+            .single();
+
+        if (findError) throw new NotFoundException('Nie znaleziono wpisu do usunięcia.');
+
+        // 2. Stwórz zapis w audycie o usunięciu
+        await supabase.from('audit_logs').insert({
+            editor_user_id: editorId,
+            target_time_entry_id: entryId,
+            previous_values: entryToDelete,
+            new_values: { status: 'DELETED' },
+            change_reason: 'Usunięcie wpisu przez managera.',
+        });
+
+        // 3. Usuń wpis
+        const { error: deleteError } = await supabase
+            .from('time_entries')
+            .delete()
+            .eq('id', entryId);
+
+        if (deleteError) throw new InternalServerErrorException(deleteError.message);
+
+        return { message: 'Wpis został pomyślnie usunięty.' };
     }
 }
