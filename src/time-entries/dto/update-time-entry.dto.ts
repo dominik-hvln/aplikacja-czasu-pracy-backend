@@ -1,4 +1,4 @@
-import { IsDateString, IsOptional } from 'class-validator';
+import {IsDateString, IsOptional, IsString} from 'class-validator';
 
 export class UpdateTimeEntryDto {
     @IsDateString()
@@ -8,4 +8,8 @@ export class UpdateTimeEntryDto {
     @IsDateString()
     @IsOptional()
     end_time?: string;
+
+    @IsString()
+    @IsOptional()
+    change_reason?: string;
 }

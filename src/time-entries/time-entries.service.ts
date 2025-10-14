@@ -164,7 +164,7 @@ export class TimeEntriesService {
             target_time_entry_id: entryId,
             previous_values: originalEntry,
             new_values: updateTimeEntryDto,
-            change_reason: 'Ręczna korekta przez managera.', // W przyszłości można to rozbudować
+            change_reason: updateTimeEntryDto.change_reason || 'Ręczna korekta przez managera.',
         });
         if (auditError) throw new InternalServerErrorException('Błąd podczas zapisu w ścieżce audytowej.');
 
@@ -180,7 +180,7 @@ export class TimeEntriesService {
         return updatedEntry;
     }
 
-    async remove(entryId: string, companyId: string, editorId: string) {
+    async remove(entryId: string, companyId: string, editorId: string, reason?: string) {
         const supabase = this.supabaseService.getClient();
 
         // 1. Pobierz wpis, który ma być usunięty
@@ -199,7 +199,7 @@ export class TimeEntriesService {
             target_time_entry_id: entryId,
             previous_values: entryToDelete,
             new_values: { status: 'DELETED' },
-            change_reason: 'Usunięcie wpisu przez managera.',
+            change_reason: reason || 'Usunięcie wpisu przez managera.',
         });
 
         // 3. Usuń wpis

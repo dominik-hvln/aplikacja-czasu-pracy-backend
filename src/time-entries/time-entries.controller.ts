@@ -46,10 +46,10 @@ export class TimeEntriesController {
 
     @Delete(':id')
     @Roles(Role.Admin, Role.Manager)
-    remove(@Param('id') entryId: string, @Req() req) {
+    remove(@Param('id') entryId: string, @Req() req, @Body() body: { reason?: string }) {
         const companyId = req.user.company_id;
         const editorId = req.user.id;
-        return this.timeEntriesService.remove(entryId, companyId, editorId);
+        return this.timeEntriesService.remove(entryId, companyId, editorId, body?.reason);
     }
 
     @Get(':id/audit-logs')
