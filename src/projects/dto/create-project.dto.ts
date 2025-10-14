@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import {IsInt, IsNotEmpty, IsNumber, IsOptional, IsString} from 'class-validator';
 
 export class CreateProjectDto {
     @IsString()
@@ -12,4 +12,8 @@ export class CreateProjectDto {
     @IsString()
     @IsOptional()
     address?: string;
+
+    @IsNumber() @IsOptional() geo_latitude?: number;
+    @IsNumber() @IsOptional() geo_longitude?: number;
+    @IsInt() @IsOptional() geo_radius_meters?: number;
 }

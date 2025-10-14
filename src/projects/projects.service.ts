@@ -1,6 +1,7 @@
 import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateProjectDto } from './dto/create-project.dto';
+import { UpdateProjectDto } from './dto/update-project.dto';
 
 @Injectable()
 export class ProjectsService {
@@ -47,9 +48,21 @@ export class ProjectsService {
         return data;
     }
 
+    async update(id: string, companyId: string, updateProjectDto: UpdateProjectDto) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('projects')
+            .update(updateProjectDto)
+            .eq('id', id)
+            .eq('company_id', companyId)
+            .select()
+            .single();
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
+
     async generateQrCode(projectId: string) {
         const supabase = this.supabaseService.getClient();
-        // Sprawdzamy, czy kod już istnieje, aby uniknąć duplikatów
         const { data: existingCode, error: findError } = await supabase
             .from('qr_codes')
             .select('code_value')
@@ -60,11 +73,10 @@ export class ProjectsService {
             return existingCode;
         }
 
-        if (findError && findError.code !== 'PGRST116') { // Ignoruj błąd 'not found'
+        if (findError && findError.code !== 'PGRST116') {
             throw new InternalServerErrorException(findError.message);
         }
 
-        // Jeśli nie istnieje, tworzymy nowy
         const { data, error } = await supabase
             .from('qr_codes')
             .insert({ project_id: projectId })

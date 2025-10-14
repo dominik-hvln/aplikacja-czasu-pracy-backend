@@ -19,47 +19,52 @@ export class TimeEntriesService {
             const eventTime = timestamp ? new Date(timestamp).toISOString() : new Date().toISOString();
             const gpsLocationString = location ? `(${location.longitude},${location.latitude})` : null;
 
-            // ✅ KROK 1: Znajdź `task_id` na podstawie samego kodu QR.
             const { data: qrCodeData, error: qrError } = await supabase
-                .from('qr_codes')
-                .select('task_id')
-                .eq('code_value', qrCodeValue)
-                .single();
-
+                .from('qr_codes').select('task_id').eq('code_value', qrCodeValue).single();
             if (qrError || !qrCodeData?.task_id) {
                 throw new NotFoundException(`Nie znaleziono aktywnego zlecenia dla zeskanowanego kodu QR.`);
             }
             const taskId = qrCodeData.task_id;
 
-            // ✅ KROK 2: Pobierz szczegóły taska, w tym `project_id`.
             const { data: taskData, error: taskError } = await supabase
-                .from('tasks')
-                .select('id, project_id')
-                .eq('id', taskId)
-                .single();
-
+                .from('tasks').select('id, project_id').eq('id', taskId).single();
             if (taskError || !taskData?.project_id) {
                 throw new NotFoundException(`Szczegóły zlecenia o ID ${taskId} nie mogły zostać odnalezione.`);
             }
             const projectId = taskData.project_id;
 
-            // Krok 3: Sprawdź, czy użytkownik ma już jakiś niezakończony wpis.
+            // ✅ POCZĄTEK LOGIKI GEOFENCNIGU
+            const { data: projectData, error: projectError } = await supabase
+                .from('projects').select('geo_latitude, geo_longitude, geo_radius_meters').eq('id', projectId).single();
+            if (projectError) {
+                throw new NotFoundException(`Projekt powiązany ze zleceniem nie został znaleziony.`);
+            }
+
+            let isOutsideGeofence = false;
+            if (location && projectData.geo_latitude && projectData.geo_longitude && projectData.geo_radius_meters) {
+                const distance = this._calculateDistance(location.latitude, location.longitude, Number(projectData.geo_latitude), Number(projectData.geo_longitude));
+                if (distance > projectData.geo_radius_meters) {
+                    isOutsideGeofence = true;
+                }
+            }
+            // ✅ KONIEC LOGIKI GEOFENCINGU
+
             const { data: lastEntry, error: lastEntryError } = await supabase
-                .from('time_entries')
-                .select('*')
-                .eq('user_id', userId)
-                .is('end_time', null)
-                .single();
+                .from('time_entries').select('*').eq('user_id', userId).is('end_time', null).single();
 
             if (lastEntryError && lastEntryError.code !== 'PGRST116') {
                 throw new InternalServerErrorException(lastEntryError.message);
             }
 
-            // Krok 4: Główna logika biznesowa (pozostaje bez zmian, ale teraz jest bezpieczniejsza)
             if (lastEntry) {
                 const { data: closedEntry, error: closeError } = await supabase
                     .from('time_entries')
-                    .update({ end_time: eventTime, end_gps_location: gpsLocationString })
+                    .update({
+                        end_time: eventTime,
+                        end_gps_location: gpsLocationString,
+                        // Jeśli start LUB koniec był poza strefą, oznacz cały wpis
+                        is_outside_geofence: lastEntry.is_outside_geofence || isOutsideGeofence,
+                    })
                     .eq('id', lastEntry.id)
                     .select()
                     .single();
@@ -79,6 +84,7 @@ export class TimeEntriesService {
                             start_time: eventTime,
                             start_gps_location: gpsLocationString,
                             is_offline_entry: !!timestamp,
+                            is_outside_geofence: isOutsideGeofence, // Dodaj flagę
                         })
                         .select()
                         .single();
@@ -97,6 +103,7 @@ export class TimeEntriesService {
                         start_time: eventTime,
                         start_gps_location: gpsLocationString,
                         is_offline_entry: !!timestamp,
+                        is_outside_geofence: isOutsideGeofence, // Dodaj flagę
                     })
                     .select()
                     .single();
@@ -110,6 +117,17 @@ export class TimeEntriesService {
         }
     }
 
+    private _calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+        const R = 6371e3; // promień Ziemi w metrach
+        const φ1 = (lat1 * Math.PI) / 180;
+        const φ2 = (lat2 * Math.PI) / 180;
+        const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+        const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+        const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
     async findAllForCompany(
         companyId: string,
         filters: { dateFrom?: string; dateTo?: string; userId?: string },
@@ -119,12 +137,13 @@ export class TimeEntriesService {
             .from('time_entries')
             .select(`
                 id,
-              start_time,
-              end_time,
-              was_edited, 
-              user:users ( first_name, last_name ),
-              project:projects ( name ),
-              task:tasks ( name )
+                start_time,
+                end_time,
+                was_edited,
+                is_outside_geofence, // Dodajemy nowe pole do selekcji
+                user:users ( first_name, last_name ),
+                project:projects ( name ),
+                task:tasks ( name )
             `)
             .eq('company_id', companyId);
 
@@ -148,12 +167,10 @@ export class TimeEntriesService {
     ) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Pobierz oryginalny wpis (bez zmian)
         const { data: originalEntry, error: findError } = await supabase
             .from('time_entries').select('*').eq('id', entryId).eq('company_id', companyId).single();
         if (findError) throw new NotFoundException('Nie znaleziono wpisu.');
 
-        // 2. Stwórz zapis w audycie (bez zmian)
         await supabase.from('audit_logs').insert({
             editor_user_id: editorId,
             target_time_entry_id: entryId,
@@ -162,13 +179,11 @@ export class TimeEntriesService {
             change_reason: updateTimeEntryDto.change_reason || 'Ręczna korekta przez managera.',
         });
 
-        // ✅ POPRAWKA: Oddziel `change_reason` od reszty danych
         const { change_reason, ...entryData } = updateTimeEntryDto;
 
-        // 3. Zaktualizuj wpis, używając tylko danych, które do niego pasują
         const { data: updatedEntry, error: updateError } = await supabase
             .from('time_entries')
-            .update({ ...entryData, was_edited: true }) // Używamy `entryData`, a nie `updateTimeEntryDto`
+            .update({ ...entryData, was_edited: true })
             .eq('id', entryId)
             .select()
             .single();
@@ -180,7 +195,6 @@ export class TimeEntriesService {
     async remove(entryId: string, companyId: string, editorId: string, reason?: string) {
         const supabase = this.supabaseService.getClient();
 
-        // 1. Pobierz wpis, który ma być usunięty
         const { data: entryToDelete, error: findError } = await supabase
             .from('time_entries')
             .select('*')
@@ -190,7 +204,6 @@ export class TimeEntriesService {
 
         if (findError) throw new NotFoundException('Nie znaleziono wpisu do usunięcia.');
 
-        // 2. Stwórz zapis w audycie o usunięciu
         await supabase.from('audit_logs').insert({
             editor_user_id: editorId,
             target_time_entry_id: entryId,
@@ -199,7 +212,6 @@ export class TimeEntriesService {
             change_reason: reason || 'Usunięcie wpisu przez managera.',
         });
 
-        // 3. Usuń wpis
         const { error: deleteError } = await supabase
             .from('time_entries')
             .delete()
