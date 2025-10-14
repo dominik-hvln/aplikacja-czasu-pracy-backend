@@ -51,4 +51,11 @@ export class TimeEntriesController {
         const editorId = req.user.id;
         return this.timeEntriesService.remove(entryId, companyId, editorId);
     }
+
+    @Get(':id/audit-logs')
+    @Roles(Role.Admin, Role.Manager)
+    getAuditLogs(@Param('id') entryId: string, @Req() req) {
+        const companyId = req.user.company_id;
+        return this.timeEntriesService.getAuditLogs(entryId, companyId);
+    }
 }

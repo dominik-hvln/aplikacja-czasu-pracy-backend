@@ -211,4 +211,20 @@ export class TimeEntriesService {
 
         return { message: 'Wpis został pomyślnie usunięty.' };
     }
+
+    async getAuditLogs(entryId: string, companyId: string) {
+        const supabase = this.supabaseService.getClient();
+        // Musimy sprawdzić, czy ten wpis na pewno należy do firmy managera
+        const { data: entry } = await supabase.from('time_entries').select('id').eq('id', entryId).eq('company_id', companyId).single();
+        if (!entry) throw new NotFoundException('Nie znaleziono wpisu.');
+
+        const { data, error } = await supabase
+            .from('audit_logs')
+            .select('*, editor:users (first_name, last_name)')
+            .eq('target_time_entry_id', entryId)
+            .order('created_at', { ascending: false });
+
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
 }
