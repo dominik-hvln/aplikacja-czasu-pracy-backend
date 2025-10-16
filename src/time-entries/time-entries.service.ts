@@ -234,4 +234,55 @@ export class TimeEntriesService {
         if (error) throw new InternalServerErrorException(error.message);
         return data;
     }
+
+    async switchTask(
+        userId: string,
+        companyId: string,
+        taskId: string,
+        location?: { latitude: number; longitude: number }
+    ) {
+        const supabase = this.supabaseService.getClient();
+        const eventTime = new Date().toISOString();
+        // ✅ Używamy przekazanej lokalizacji
+        const gpsLocationString = location ? `(${location.longitude},${location.latitude})` : null;
+
+        const { data: lastEntry } = await supabase
+            .from('time_entries').select('*').eq('user_id', userId).is('end_time', null).single();
+
+        if (lastEntry) {
+            await supabase.from('time_entries').update({
+                end_time: eventTime,
+                end_gps_location: gpsLocationString, // ✅ Zapisujemy GPS przy zamknięciu starego wpisu
+            }).eq('id', lastEntry.id);
+        }
+
+        const { data: taskData } = await supabase.from('tasks').select('project_id').eq('id', taskId).single();
+        if (!taskData) throw new NotFoundException('Nie znaleziono zlecenia.');
+
+        const { data: newEntry } = await supabase.from('time_entries').insert({
+            user_id: userId, project_id: taskData.project_id, task_id: taskId, company_id: companyId,
+            start_time: eventTime, start_gps_location: gpsLocationString // ✅ Zapisujemy GPS przy otwarciu nowego wpisu
+        }).select().single();
+
+        return { status: 'job_switch_success', newEntry };
+    }
+
+    async findActiveForUser(userId: string) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('time_entries')
+            .select('*, task:tasks(name)')
+            .eq('user_id', userId)
+            .is('end_time', null)
+            .single();
+
+        // To nie jest błąd, po prostu nie ma aktywnego wpisu
+        if (error && error.code === 'PGRST116') {
+            return null;
+        }
+        if (error) {
+            throw new InternalServerErrorException(error.message);
+        }
+        return data;
+    }
 }

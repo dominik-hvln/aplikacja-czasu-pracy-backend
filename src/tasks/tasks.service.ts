@@ -43,4 +43,14 @@ export class TasksService {
         if (error) throw new InternalServerErrorException(error.message);
         return data;
     }
+
+    async findAllForCompany(companyId: string) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('tasks')
+            .select('*, project:projects(name)') // Pobieramy od razu nazwę projektu
+            .eq('company_id', companyId);
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
 }

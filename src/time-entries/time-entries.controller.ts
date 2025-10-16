@@ -3,6 +3,7 @@ import { TimeEntriesService } from './time-entries.service';
 import { AuthGuard } from '@nestjs/passport';
 import {Role, Roles} from "../auth/roles.decorator";
 import {UpdateTimeEntryDto} from "./dto/update-time-entry.dto";
+import { SwitchTaskDto } from './dto/switch-task.dto';
 
 @Controller('time-entries')
 @UseGuards(AuthGuard('jwt'))
@@ -57,5 +58,19 @@ export class TimeEntriesController {
     getAuditLogs(@Param('id') entryId: string, @Req() req) {
         const companyId = req.user.company_id;
         return this.timeEntriesService.getAuditLogs(entryId, companyId);
+    }
+
+    @Post('switch-task')
+    @Roles(Role.Employee)
+    switchTask(@Body() switchTaskDto: SwitchTaskDto, @Req() req) {
+        const { id: userId, company_id: companyId } = req.user;
+        return this.timeEntriesService.switchTask(userId, companyId, switchTaskDto.taskId, switchTaskDto.location);
+    }
+
+    @Get('my-active')
+    @Roles(Role.Employee) // Dostępny tylko dla pracownika
+    findMyActiveEntry(@Req() req) {
+        const userId = req.user.id;
+        return this.timeEntriesService.findActiveForUser(userId);
     }
 }
