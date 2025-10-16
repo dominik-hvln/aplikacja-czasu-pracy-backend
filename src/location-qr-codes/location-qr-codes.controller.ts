@@ -1,0 +1,31 @@
+import { Controller, Get, Post, Body, Param, Delete, UseGuards, Req } from '@nestjs/common';
+import { LocationQrCodesService } from './location-qr-codes.service';
+import { CreateLocationQrCodeDto } from './dto/create-location-qr-code.dto';
+import { AuthGuard } from '@nestjs/passport';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles, Role } from '../auth/roles.decorator';
+
+@Controller('location-qr-codes')
+@UseGuards(AuthGuard('jwt'), RolesGuard)
+@Roles(Role.Admin, Role.Manager)
+export class LocationQrCodesController {
+    constructor(private readonly locationQrCodesService: LocationQrCodesService) {}
+
+    @Post()
+    create(@Body() createDto: CreateLocationQrCodeDto, @Req() req) {
+        const companyId = req.user.company_id;
+        return this.locationQrCodesService.create(createDto, companyId);
+    }
+
+    @Get()
+    findAll(@Req() req) {
+        const companyId = req.user.company_id;
+        return this.locationQrCodesService.findAllForCompany(companyId);
+    }
+
+    @Delete(':id')
+    remove(@Param('id') id: string, @Req() req) {
+        const companyId = req.user.company_id;
+        return this.locationQrCodesService.remove(id, companyId);
+    }
+}

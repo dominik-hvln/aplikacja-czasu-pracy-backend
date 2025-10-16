@@ -9,6 +9,7 @@ import { SuperAdminModule } from './super-admin/super-admin.module';
 import { TimeEntriesModule } from './time-entries/time-entries.module';
 import { UsersModule } from './users/users.module';
 import { TasksModule } from './tasks/tasks.module';
+import { LocationQrCodesModule } from './location-qr-codes/location-qr-codes.module';
 
 @Module({
     imports: [
@@ -20,6 +21,7 @@ import { TasksModule } from './tasks/tasks.module';
         TimeEntriesModule,
         UsersModule,
         TasksModule,
+        LocationQrCodesModule,
     ],
     controllers: [AppController],
     providers: [AppService],
