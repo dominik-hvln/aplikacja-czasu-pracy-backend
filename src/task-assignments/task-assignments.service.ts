@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 
 @Injectable()
@@ -7,9 +7,6 @@ export class TaskAssignmentsService {
 
     async assign(taskId: string, userId: string, companyId: string) {
         const supabase = this.supabaseService.getClient();
-
-        // TODO: W przyszłości dodać walidację, czy user i task należą do tej samej firmy
-
         const { data, error } = await supabase
             .from('task_assignments')
             .insert({
@@ -21,7 +18,6 @@ export class TaskAssignmentsService {
             .single();
 
         if (error) {
-            // Kod '23505' to błąd unikalności (już jest przypisany)
             if (error.code === '23505') {
                 return { message: 'Pracownik jest już przypisany do tego zlecenia.' };
             }
@@ -32,7 +28,6 @@ export class TaskAssignmentsService {
 
     async unassign(taskId: string, userId: string, companyId: string) {
         const supabase = this.supabaseService.getClient();
-
         const { error } = await supabase
             .from('task_assignments')
             .delete()
@@ -44,5 +39,29 @@ export class TaskAssignmentsService {
             throw new InternalServerErrorException(error.message);
         }
         return { message: 'Pracownik został pomyślnie odpięty od zlecenia.' };
+    }
+
+    // ✅ NOWA METODA
+    async findAssignmentsForTask(taskId: string, companyId: string) {
+        const supabase = this.supabaseService.getClient();
+
+        // Pobieramy listę przypisań wraz z danymi użytkowników
+        const { data, error } = await supabase
+            .from('task_assignments')
+            .select(`
+        id,
+        user:users ( id, first_name, last_name, email )
+      `)
+            .eq('task_id', taskId)
+            .eq('company_id', companyId);
+
+        if (error) {
+            throw new InternalServerErrorException(error.message);
+        }
+        // Zwracamy listę przypisanych użytkowników
+        return data.map(item => ({
+            assignment_id: item.id, // ID samego przypisania (do usunięcia)
+            ...item.user
+        }));
     }
 }
