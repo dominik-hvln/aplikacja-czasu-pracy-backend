@@ -10,6 +10,7 @@ import { TimeEntriesModule } from './time-entries/time-entries.module';
 import { UsersModule } from './users/users.module';
 import { TasksModule } from './tasks/tasks.module';
 import { LocationQrCodesModule } from './location-qr-codes/location-qr-codes.module';
+import { TaskAssignmentsModule } from './task-assignments/task-assignments.module';
 
 @Module({
     imports: [
@@ -22,6 +23,7 @@ import { LocationQrCodesModule } from './location-qr-codes/location-qr-codes.mod
         UsersModule,
         TasksModule,
         LocationQrCodesModule,
+        TaskAssignmentsModule,
     ],
     controllers: [AppController],
     providers: [AppService],
