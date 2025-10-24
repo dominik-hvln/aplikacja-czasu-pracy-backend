@@ -12,6 +12,7 @@ import { TasksModule } from './tasks/tasks.module';
 import { LocationQrCodesModule } from './location-qr-codes/location-qr-codes.module';
 import { TaskAssignmentsModule } from './task-assignments/task-assignments.module';
 import { ActivityModule } from './activity/activity.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
     imports: [
@@ -26,6 +27,7 @@ import { ActivityModule } from './activity/activity.module';
         LocationQrCodesModule,
         TaskAssignmentsModule,
         ActivityModule,
+        DashboardModule,
     ],
     controllers: [AppController],
     providers: [AppService],
