@@ -16,13 +16,15 @@ export class TimeEntriesService {
         location?: { latitude: number; longitude: number },
         timestamp?: string,
     ) {
+        const supabase = this.supabaseService.getClient();
+
         // Krok 1: Sprawdź, czy to jest kod QR specyficzny dla zlecenia (taska).
         const { data: taskQrCode } = await this.supabaseService.getClient()
             .from('qr_codes').select('task:tasks(id, project_id)').eq('code_value', qrCodeValue).single();
 
         if (taskQrCode && taskQrCode.task) {
             // === SCENARIUSZ 1: Zeskanowano kod zlecenia (taska). ===
-            return this.handleTaskScan(userId, companyId, qrCodeValue, location, timestamp);
+            return this.handleTaskScan(userId, companyId, (taskQrCode.task as any), location, timestamp);
         }
 
         // Krok 2: Jeśli nie, sprawdź, czy to kod ogólny/lokalizacyjny.
@@ -39,64 +41,59 @@ export class TimeEntriesService {
 
     /**
      * Metoda pomocnicza obsługująca logikę dla skanów ZLECEŃ (tasków).
-     * To jest Twoja istniejąca, działająca logika.
      */
     private async handleTaskScan(
         userId: string,
         companyId: string,
-        qrCodeValue: string, // Potrzebujemy, aby znaleźć taska
+        task: { id: string, project_id: string },
         location?: { latitude: number; longitude: number },
         timestamp?: string,
     ) {
         const supabase = this.supabaseService.getClient();
         try {
-            // Pobieramy ID taska i projektu (bez zmian)
-            const { data: qrCodeData } = await supabase.from('qr_codes').select('task_id').eq('code_value', qrCodeValue).single();
-            if (!qrCodeData?.task_id) throw new NotFoundException(`Brak taska dla kodu.`);
-            const taskId = qrCodeData.task_id;
-            const { data: taskData } = await supabase.from('tasks').select('id, project_id').eq('id', taskId).single();
-            if (!taskData?.project_id) throw new NotFoundException(`Brak projektu dla taska.`);
-            const projectId = taskData.project_id;
+            const taskId = task.id;
+            const projectId = task.project_id;
 
-            // Logika Geofencingu (bez zmian)
-            const { data: projectData } = await supabase.from('projects').select('geo_latitude, geo_longitude, geo_radius_meters').eq('id', projectId).single();
-            let isOutsideGeofence = false;
-            if (location && projectData?.geo_latitude && projectData?.geo_longitude && projectData?.geo_radius_meters) {
-                const distance = this._calculateDistance(location.latitude, location.longitude, Number(projectData.geo_latitude), Number(projectData.geo_longitude));
-                if (distance > projectData.geo_radius_meters) isOutsideGeofence = true;
-            }
+            // ✅ POPRAWKA 1: Przekazujemy `location || null`
+            const isOutsideOnClockIn = await this.getGeofenceStatus(projectId, location || null);
 
             const eventTime = timestamp ? new Date(timestamp).toISOString() : new Date().toISOString();
             const gpsLocationString = location ? `(${location.longitude},${location.latitude})` : null;
 
-            const { data: lastEntry } = await supabase.from('time_entries').select('*').eq('user_id', userId).is('end_time', null).single();
+            const { data: lastEntry, error: lastEntryError } = await supabase.from('time_entries').select('*').eq('user_id', userId).is('end_time', null).single();
+
+            if (lastEntryError && lastEntryError.code !== 'PGRST116') {
+                throw new InternalServerErrorException(lastEntryError.message);
+            }
 
             if (lastEntry) { // Użytkownik ma aktywny wpis
-                const { data: closedEntry } = await supabase.from('time_entries').update({
+                // ✅ POPRAWKA 2: Przekazujemy `location || null`
+                const isOutsideOnClockOut = await this.getGeofenceStatus(lastEntry.project_id, location || null);
+                const { data: closedEntry, error: closeError } = await supabase.from('time_entries').update({
                     end_time: eventTime, end_gps_location: gpsLocationString,
-                    is_outside_geofence: lastEntry.is_outside_geofence || isOutsideGeofence,
+                    is_outside_geofence: lastEntry.is_outside_geofence || isOutsideOnClockOut,
                 }).eq('id', lastEntry.id).select().single();
 
+                if (closeError) throw new InternalServerErrorException(closeError.message);
+
                 if (lastEntry.task_id === taskId) {
-                    // ✅ ZAKOŃCZENIE TEGO SAMEGO TASK-A -> status 'clock_out'
                     return { status: 'clock_out', entry: closedEntry };
                 } else {
-                    // ZMIANA TASK-A -> tworzymy nowy wpis ze statusem 'clock_in'
-                    const { data: newEntry } = await supabase.from('time_entries').insert({
+                    const { data: newEntry, error: insertError } = await supabase.from('time_entries').insert({
                         user_id: userId, project_id: projectId, task_id: taskId, company_id: companyId,
                         start_time: eventTime, start_gps_location: gpsLocationString,
-                        is_offline_entry: !!timestamp, is_outside_geofence: isOutsideGeofence,
+                        is_offline_entry: !!timestamp, is_outside_geofence: isOutsideOnClockIn,
                     }).select().single();
-                    // Zwracamy status 'clock_in', bo efektywnie rozpoczynamy nowy task
+                    if (insertError) throw new InternalServerErrorException(insertError.message);
                     return { status: 'clock_in', entry: newEntry };
                 }
             } else { // Użytkownik nie ma aktywnego wpisu
-                // ✅ ROZPOCZĘCIE NOWEGO TASK-A -> status 'clock_in'
-                const { data: newEntry } = await supabase.from('time_entries').insert({
+                const { data: newEntry, error: insertError } = await supabase.from('time_entries').insert({
                     user_id: userId, project_id: projectId, task_id: taskId, company_id: companyId,
                     start_time: eventTime, start_gps_location: gpsLocationString,
-                    is_offline_entry: !!timestamp, is_outside_geofence: isOutsideGeofence,
+                    is_offline_entry: !!timestamp, is_outside_geofence: isOutsideOnClockIn,
                 }).select().single();
+                if (insertError) throw new InternalServerErrorException(insertError.message);
                 return { status: 'clock_in', entry: newEntry };
             }
         } catch (error) {
@@ -106,7 +103,7 @@ export class TimeEntriesService {
     }
 
     /**
-     * NOWA metoda pomocnicza, obsługująca logikę dla skanów OGÓLNYCH/lokalizacyjnych.
+     * Metoda pomocnicza dla skanów OGÓLNYCH/lokalizacyjnych.
      */
     private async handleLocationScan(
         userId: string,
@@ -121,24 +118,34 @@ export class TimeEntriesService {
         const { data: lastEntry } = await supabase.from('time_entries').select('*').eq('user_id', userId).is('end_time', null).single();
 
         if (lastEntry) { // Użytkownik kończy dzień pracy
-            // ✅ ZAKOŃCZENIE DNIA -> status 'clock_out'
-            const { data: closedEntry } = await supabase.from('time_entries').update({
+            const { data: closedEntry, error: closeError } = await supabase.from('time_entries').update({
                 end_time: eventTime, end_gps_location: gpsLocationString,
             }).eq('id', lastEntry.id).select().single();
+            if (closeError) throw new InternalServerErrorException(closeError.message);
             return { status: 'clock_out', entry: closedEntry };
         } else { // Użytkownik rozpoczyna ogólny dzień pracy
-            // ✅ ROZPOCZĘCIE DNIA -> status 'clock_in' (bez task_id)
-            const { data: newEntry } = await supabase.from('time_entries').insert({
+            const { data: newEntry, error: insertError } = await supabase.from('time_entries').insert({
                 user_id: userId, company_id: companyId,
                 start_time: eventTime, start_gps_location: gpsLocationString,
                 is_offline_entry: !!timestamp,
                 project_id: null, task_id: null,
             }).select().single();
+            if (insertError) throw new InternalServerErrorException(insertError.message);
             return { status: 'clock_in', entry: newEntry };
         }
     }
 
-    // --- Reszta metod pozostaje bez zmian ---
+    // --- Metody pomocnicze (Geofencing) ---
+    private async getGeofenceStatus(projectId: string | null, location: { latitude: number, longitude: number } | null): Promise<boolean> {
+        if (!location || !projectId) return false;
+        const { data: projectData } = await this.supabaseService.getClient()
+            .from('projects').select('geo_latitude, geo_longitude, geo_radius_meters').eq('id', projectId).single();
+        if (!projectData?.geo_latitude || !projectData.geo_longitude || !projectData.geo_radius_meters) {
+            return false;
+        }
+        const distance = this._calculateDistance(location.latitude, location.longitude, Number(projectData.geo_latitude), Number(projectData.geo_longitude));
+        return distance > projectData.geo_radius_meters;
+    }
 
     private _calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
         const R = 6371e3;
@@ -151,6 +158,7 @@ export class TimeEntriesService {
         return R * c;
     }
 
+    // --- Pozostałe metody (bez zmian) ---
     async findAllForCompany(
         companyId: string,
         filters: { dateFrom?: string; dateTo?: string; userId?: string },
@@ -226,7 +234,6 @@ export class TimeEntriesService {
     ) {
         const supabase = this.supabaseService.getClient();
         const eventTime = new Date().toISOString();
-        // ✅ Używamy przekazanej lokalizacji
         const gpsLocationString = location ? `(${location.longitude},${location.latitude})` : null;
 
         const { data: lastEntry } = await supabase
@@ -235,16 +242,21 @@ export class TimeEntriesService {
         if (lastEntry) {
             await supabase.from('time_entries').update({
                 end_time: eventTime,
-                end_gps_location: gpsLocationString, // ✅ Zapisujemy GPS przy zamknięciu starego wpisu
+                end_gps_location: gpsLocationString,
             }).eq('id', lastEntry.id);
         }
 
         const { data: taskData } = await supabase.from('tasks').select('project_id').eq('id', taskId).single();
         if (!taskData) throw new NotFoundException('Nie znaleziono zlecenia.');
 
+        // ✅ POPRAWKA 3: Przekazujemy `location || null`
+        const isOutside = await this.getGeofenceStatus(taskData.project_id, location || null);
+
         const { data: newEntry } = await supabase.from('time_entries').insert({
             user_id: userId, project_id: taskData.project_id, task_id: taskId, company_id: companyId,
-            start_time: eventTime, start_gps_location: gpsLocationString // ✅ Zapisujemy GPS przy otwarciu nowego wpisu
+            start_time: eventTime, start_gps_location: gpsLocationString,
+            is_outside_geofence: isOutside,
+            is_offline_entry: false
         }).select().single();
 
         return { status: 'job_switch_success', newEntry };
@@ -258,14 +270,8 @@ export class TimeEntriesService {
             .eq('user_id', userId)
             .is('end_time', null)
             .single();
-
-        // To nie jest błąd, po prostu nie ma aktywnego wpisu
-        if (error && error.code === 'PGRST116') {
-            return null;
-        }
-        if (error) {
-            throw new InternalServerErrorException(error.message);
-        }
+        if (error && error.code === 'PGRST116') return null;
+        if (error) throw new InternalServerErrorException(error.message);
         return data;
     }
 }
