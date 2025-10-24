@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module';
 import { TasksModule } from './tasks/tasks.module';
 import { LocationQrCodesModule } from './location-qr-codes/location-qr-codes.module';
 import { TaskAssignmentsModule } from './task-assignments/task-assignments.module';
+import { ActivityModule } from './activity/activity.module';
 
 @Module({
     imports: [
@@ -24,6 +25,7 @@ import { TaskAssignmentsModule } from './task-assignments/task-assignments.modul
         TasksModule,
         LocationQrCodesModule,
         TaskAssignmentsModule,
+        ActivityModule,
     ],
     controllers: [AppController],
     providers: [AppService],
