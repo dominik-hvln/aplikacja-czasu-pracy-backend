@@ -6,30 +6,6 @@ import { UpdateTimeEntryDto } from "./dto/update-time-entry.dto";
 export class TimeEntriesService {
     constructor(private readonly supabaseService: SupabaseService) {}
 
-    // Metoda pomocnicza do obliczania dystansu
-    private _calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-        const R = 6371e3; // promień Ziemi w metrach
-        const φ1 = (lat1 * Math.PI) / 180;
-        const φ2 = (lat2 * Math.PI) / 180;
-        const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-        const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-        const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        return R * c;
-    }
-
-    // Metoda pomocnicza do sprawdzania geofence
-    private async getGeofenceStatus(projectId: string | null, location: { latitude: number, longitude: number } | null): Promise<boolean> {
-        if (!location || !projectId) return false;
-        const { data: projectData } = await this.supabaseService.getClient()
-            .from('projects').select('geo_latitude, geo_longitude, geo_radius_meters').eq('id', projectId).single();
-        if (!projectData?.geo_latitude || !projectData.geo_longitude || !projectData.geo_radius_meters) {
-            return false;
-        }
-        const distance = this._calculateDistance(location.latitude, location.longitude, Number(projectData.geo_latitude), Number(projectData.geo_longitude));
-        return distance > projectData.geo_radius_meters;
-    }
-
     /**
      * Główna funkcja "dyspozytor", która decyduje, jak obsłużyć skan.
      */
@@ -74,7 +50,7 @@ export class TimeEntriesService {
                 end_time: eventTime,
                 end_gps_location: gpsLocationString,
                 is_outside_geofence: lastEntry.is_outside_geofence || isOutsideOnClockOut,
-            }).eq('id', lastEntry.id).select('*, task:tasks(name)').single(); // Zwracamy pełne dane
+            }).eq('id', lastEntry.id).select('*, task:tasks(name)').single();
 
             // Logika Zmiany lub Zakończenia
             if ((scanType === 'task' && lastEntry.task_id === scannedTaskId) || (scanType === 'location' && !lastEntry.task_id)) {
@@ -87,7 +63,7 @@ export class TimeEntriesService {
                 user_id: userId, project_id: scannedProjectId, task_id: scannedTaskId, company_id: companyId,
                 start_time: eventTime, start_gps_location: gpsLocationString,
                 is_offline_entry: !!timestamp, is_outside_geofence: isOutsideOnClockIn,
-            }).select('*, task:tasks(name)').single(); // Zwracamy pełne dane
+            }).select('*, task:tasks(name)').single();
             return { status: 'clock_in', entry: newEntry }; // Uproszczony status
 
         } else { // Jeśli nie ma aktywnego wpisu, zawsze zaczynaj nowy
@@ -96,24 +72,14 @@ export class TimeEntriesService {
                 user_id: userId, project_id: scannedProjectId, task_id: scannedTaskId, company_id: companyId,
                 start_time: eventTime, start_gps_location: gpsLocationString,
                 is_offline_entry: !!timestamp, is_outside_geofence: isOutsideOnClockIn,
-            }).select('*, task:tasks(name)').single(); // Zwracamy pełne dane
+            }).select('*, task:tasks(name)').single();
             return { status: 'clock_in', entry: newEntry };
         }
     }
 
-    async findActiveForUser(userId: string) {
-        const supabase = this.supabaseService.getClient();
-        const { data, error } = await supabase
-            .from('time_entries')
-            .select('*, task:tasks(name)')
-            .eq('user_id', userId)
-            .is('end_time', null)
-            .single();
-        if (error && error.code === 'PGRST116') return null;
-        if (error) throw new InternalServerErrorException(error.message);
-        return data;
-    }
-
+    /**
+     * Metoda do przełączania taska z listy w aplikacji
+     */
     async switchTask(
         userId: string,
         companyId: string,
@@ -148,7 +114,46 @@ export class TimeEntriesService {
         return { status: 'clock_in', newEntry }; // Uproszczony status
     }
 
-    // --- Pozostałe metody (findAllForCompany, update, remove, getAuditLogs) ---
+    /**
+     * Metoda do pobierania aktywnego wpisu dla pracownika
+     */
+    async findActiveForUser(userId: string) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('time_entries')
+            .select('*, task:tasks(name)')
+            .eq('user_id', userId)
+            .is('end_time', null)
+            .single();
+        if (error && error.code === 'PGRST116') return null;
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
+
+    // --- Metody pomocnicze (Geofencing) ---
+    private async getGeofenceStatus(projectId: string | null, location: { latitude: number, longitude: number } | null): Promise<boolean> {
+        if (!location || !projectId) return false;
+        const { data: projectData } = await this.supabaseService.getClient()
+            .from('projects').select('geo_latitude, geo_longitude, geo_radius_meters').eq('id', projectId).single();
+        if (!projectData?.geo_latitude || !projectData.geo_longitude || !projectData.geo_radius_meters) {
+            return false;
+        }
+        const distance = this._calculateDistance(location.latitude, location.longitude, Number(projectData.geo_latitude), Number(projectData.geo_longitude));
+        return distance > projectData.geo_radius_meters;
+    }
+
+    private _calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+        const R = 6371e3;
+        const φ1 = (lat1 * Math.PI) / 180;
+        const φ2 = (lat2 * Math.PI) / 180;
+        const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+        const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+        const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    // --- Pozostałe metody (Zarządzanie przez Managera) ---
     async findAllForCompany(
         companyId: string,
         filters: { dateFrom?: string; dateTo?: string; userId?: string },
