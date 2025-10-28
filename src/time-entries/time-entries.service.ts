@@ -28,6 +28,7 @@ export class TimeEntriesService {
 
     /**
      * PRZEPISANA LOGIKA OBSŁUGI SKANOWANIA
+     * Obsługuje start/stop/zmianę jednym skanem.
      */
     async handleScan(
         userId: string, companyId: string, qrCodeValue: string,
@@ -41,19 +42,22 @@ export class TimeEntriesService {
         let scannedTaskId: string | null = null;
         let scanType: 'task' | 'location' = 'location';
 
+        // 1. Sprawdź, czy to kod zlecenia (task)
         const { data: taskQrCode } = await supabase.from('qr_codes').select('task:tasks(id, project_id)').eq('code_value', qrCodeValue).single();
         if (taskQrCode && taskQrCode.task) {
             scanType = 'task';
             scannedTaskId = (taskQrCode.task as any).id;
             scannedProjectId = (taskQrCode.task as any).project_id;
         } else {
+            // 2. Sprawdź, czy to kod lokalizacji
             const { data: locationQrCode } = await supabase.from('location_qr_codes').select('id').eq('code_value', qrCodeValue).single();
             if (!locationQrCode) throw new NotFoundException('Nieprawidłowy kod QR.');
         }
 
+        // 3. Znajdź ostatni aktywny wpis
         const { data: lastEntry } = await supabase.from('time_entries').select('*').eq('user_id', userId).is('end_time', null).single();
 
-        // SCENARIUSZ 1: Użytkownik jest już w pracy
+        // SCENARIUSZ 1: Użytkownik jest już w pracy (ma aktywny wpis)
         if (lastEntry) {
             const isOutsideOnClockOut = await this.getGeofenceStatus(lastEntry.project_id, location || null);
             const { data: closedEntry } = await supabase.from('time_entries').update({
@@ -62,22 +66,23 @@ export class TimeEntriesService {
                 is_outside_geofence: lastEntry.is_outside_geofence || isOutsideOnClockOut,
             }).eq('id', lastEntry.id).select('*, task:tasks(name)').single(); // Zwracamy pełne dane
 
+            // Logika Zmiany lub Zakończenia
             // Zakończenie: skanujemy ten sam task LUB oba są ogólne
             if ((scanType === 'task' && lastEntry.task_id === scannedTaskId) || (scanType === 'location' && !lastEntry.task_id)) {
                 return { status: 'clock_out', entry: closedEntry };
             }
 
-            // ZMIANA: otwieramy nowy wpis
+            // To jest ZMIANA - otwieramy nowy wpis
             const isOutsideOnClockIn = await this.getGeofenceStatus(scannedProjectId, location || null);
             const { data: newEntry } = await supabase.from('time_entries').insert({
                 user_id: userId, project_id: scannedProjectId, task_id: scannedTaskId, company_id: companyId,
                 start_time: eventTime, start_gps_location: gpsLocationString,
                 is_offline_entry: !!timestamp, is_outside_geofence: isOutsideOnClockIn,
             }).select('*, task:tasks(name)').single(); // Zwracamy pełne dane
-            return { status: 'clock_in', entry: newEntry };
+            return { status: 'clock_in', entry: newEntry }; // Uproszczony status
         }
 
-        // SCENARIUSZ 2: Użytkownik nie jest w pracy -> Rozpocznij pracę
+        // SCENARIUSZ 2: Użytkownik nie jest w pracy (brak lastEntry) -> Rozpocznij pracę
         const isOutsideOnClockIn = await this.getGeofenceStatus(scannedProjectId, location || null);
         const { data: newEntry } = await supabase.from('time_entries').insert({
             user_id: userId, project_id: scannedProjectId, task_id: scannedTaskId, company_id: companyId,
@@ -98,6 +103,7 @@ export class TimeEntriesService {
         const eventTime = new Date().toISOString();
         const gpsLocationString = location ? `(${location.longitude},${location.latitude})` : null;
 
+        // Krok 1: Znajdź i zamknij aktywny wpis (musi być, bo ten widok jest tylko dla zalogowanych)
         const { data: lastEntry } = await supabase.from('time_entries').select('*').eq('user_id', userId).is('end_time', null).single();
         if (lastEntry) {
             const isOutsideOnClockOut = await this.getGeofenceStatus(lastEntry.project_id, location || null);
@@ -108,6 +114,7 @@ export class TimeEntriesService {
             }).eq('id', lastEntry.id);
         }
 
+        // Krok 2: Otwórz nowy wpis dla wybranego taska
         const { data: taskData } = await supabase.from('tasks').select('project_id').eq('id', taskId).single();
         if (!taskData) throw new NotFoundException('Nie znaleziono zlecenia.');
 
@@ -118,7 +125,7 @@ export class TimeEntriesService {
             is_outside_geofence: isOutside, is_offline_entry: false
         }).select('*, task:tasks(name)').single(); // Zwracamy pełne dane
 
-        return { status: 'clock_in', newEntry }; // Zawsze zwracaj clock_in i nowy wpis
+        return { status: 'clock_in', newEntry }; // Zwracamy status 'clock_in' i nowy wpis
     }
 
     // --- Pozostałe Metody (bez zmian) ---
