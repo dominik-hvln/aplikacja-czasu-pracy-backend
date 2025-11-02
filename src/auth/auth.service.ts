@@ -14,8 +14,10 @@ export class AuthService {
     async register(registerDto: RegisterDto) {
         // Używamy standardowego klienta do operacji publicznych
         const supabase = this.supabaseService.getClient();
+        // Używamy klienta admina do operacji na tabelach z RLS
+        const supabaseAdmin = this.supabaseService.getAdminClient();
 
-        // 1. Stwórz firmę
+        // 1. Stwórz firmę (klientem publicznym)
         const { data: companyData, error: companyError } = await supabase
             .from('companies')
             .insert({ name: registerDto.companyName })
@@ -23,7 +25,7 @@ export class AuthService {
             .single();
         if (companyError) throw new InternalServerErrorException(companyError.message);
 
-        // 2. Stwórz użytkownika (Supabase Auth)
+        // 2. Stwórz użytkownika (Supabase Auth, klientem publicznym)
         const { data: authData, error: authError } = await supabase.auth.signUp({
             email: registerDto.email,
             password: registerDto.password,
@@ -42,10 +44,10 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się utworzyć danych użytkownika.');
         }
 
-        // 3. Zaktualizuj profil użytkownika
-        const { error: profileError } = await supabase
+        // 3. ✅ POPRAWKA: Używamy klienta ADMINA do aktualizacji profilu w tabeli 'users'
+        const { error: profileError } = await supabaseAdmin
             .from('users')
-            .update({ // Używamy UPDATE, a nie INSERT
+            .update({
                 company_id: companyData.id,
                 first_name: registerDto.firstName,
                 last_name: registerDto.lastName,
@@ -55,10 +57,8 @@ export class AuthService {
             .eq('id', authData.user.id); // Znajdź wiersz stworzony przez trigger
 
         if (profileError) {
-            // ✅ Użyj klienta admina do usunięcia użytkownika
-            const supabaseAdmin = this.supabaseService.getAdminClient();
+            // Jeśli aktualizacja profilu się nie uda, usuń wszystko
             await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
-
             await supabase.from('companies').delete().eq('id', companyData.id);
             throw new InternalServerErrorException(profileError.message);
         }
@@ -100,7 +100,6 @@ export class AuthService {
     }
 
     async updateUserPassword(userId: string, newPassword: string) {
-        // ✅ Użyj klienta admina do aktualizacji hasła
         const supabaseAdmin = this.supabaseService.getAdminClient();
         const { data, error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
             password: newPassword,
