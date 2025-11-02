@@ -12,9 +12,9 @@ export class AuthService {
     ) {}
 
     async register(registerDto: RegisterDto) {
-        // Używamy standardowego klienta do operacji publicznych
+        // Używamy klienta PUBLICZNEGO do operacji publicznych
         const supabase = this.supabaseService.getClient();
-        // Używamy klienta admina do operacji na tabelach z RLS
+        // Używamy klienta ADMINA do operacji na tabelach z RLS
         const supabaseAdmin = this.supabaseService.getAdminClient();
 
         // 1. Stwórz firmę (klientem publicznym)
@@ -32,10 +32,12 @@ export class AuthService {
         });
 
         if (authError) {
+            // Cofnij stworzenie firmy
             await supabase.from('companies').delete().eq('id', companyData.id);
             if (authError.message.includes('User already registered')) {
                 throw new ConflictException('Użytkownik o tym adresie e-mail już istnieje.');
             }
+            // Błąd "Email rate limit exceeded" zostanie przechwycony tutaj
             throw new InternalServerErrorException(authError.message);
         }
 
@@ -44,7 +46,7 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się utworzyć danych użytkownika.');
         }
 
-        // 3. ✅ POPRAWKA: Używamy klienta ADMINA do aktualizacji profilu w tabeli 'users'
+        // 3. Zaktualizuj profil użytkownika (KLIENTEM ADMINA, aby ominąć RLS)
         const { error: profileError } = await supabaseAdmin
             .from('users')
             .update({
