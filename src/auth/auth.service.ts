@@ -3,7 +3,7 @@ import {
     InternalServerErrorException,
     ConflictException,
     UnauthorizedException,
-    Inject, // ⬅️ dodaj
+    Inject,
 } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { RegisterDto } from './dto/register.dto';
@@ -11,7 +11,7 @@ import { LoginDto } from './dto/login.dto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import type { Transporter } from 'nodemailer';
-import { randomUUID } from 'crypto'; // (opcjonalnie do resend)
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class AuthService {
@@ -19,13 +19,30 @@ export class AuthService {
         private readonly supabaseService: SupabaseService,
         private readonly jwtService: JwtService,
         private readonly config: ConfigService,
-        @Inject('MAILER') private readonly mailer: Transporter, // ⬅️ użyj stringowego tokena
+        @Inject('MAILER') private readonly mailer: Transporter,
     ) {}
+
+    private async sendActivationEmail(to: string, firstName: string, confirmUrl: string) {
+        const from = this.config.get<string>('MAIL_FROM') || 'no-reply@yourapp.local';
+        await this.mailer.sendMail({
+            from,
+            to,
+            subject: 'Potwierdź swój adres e-mail',
+            html: `
+        <p>Cześć ${firstName || ''},</p>
+        <p>Dokończ rejestrację klikając w link poniżej:</p>
+        <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
+        <p>Jeśli to nie Ty, zignoruj tę wiadomość.</p>
+      `,
+            text: `Potwierdź rejestrację: ${confirmUrl}`,
+        });
+    }
 
     async register(registerDto: RegisterDto) {
         const supabase = this.supabaseService.getClient();
         const supabaseAdmin = this.supabaseService.getAdminClient();
 
+        // 1) Firma
         const { data: companyData, error: companyError } = await supabase
             .from('companies')
             .insert({ name: registerDto.companyName })
@@ -35,10 +52,11 @@ export class AuthService {
 
         const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
 
+        // 2) Generate link (to tworzy usera po stronie Supabase, ale nie wysyła maila)
         const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
             type: 'signup',
             email: registerDto.email,
-            password: registerDto.password,                 // wymagane
+            password: registerDto.password, // wymagane
             options: {
                 data: { first_name: registerDto.firstName, last_name: registerDto.lastName },
                 redirectTo: `${appUrl}/auth/confirm`,
@@ -59,6 +77,7 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się wygenerować linku aktywacyjnego.');
         }
 
+        // 3) Uzupełnij profil (ADMIN, RLS bypass)
         const { error: profileError } = await supabaseAdmin
             .from('users')
             .update({
@@ -75,28 +94,23 @@ export class AuthService {
             throw new InternalServerErrorException(profileError.message);
         }
 
-        const from = this.config.get<string>('MAIL_FROM') || 'no-reply@yourapp.local';
-        try {
-            await this.mailer.sendMail({
-                from,
-                to: registerDto.email,
-                subject: 'Potwierdź swój adres e-mail',
-                html: `
-          <p>Cześć ${registerDto.firstName || ''},</p>
-          <p>Dokończ rejestrację klikając w link poniżej:</p>
-          <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
-          <p>Jeśli to nie Ty, zignoruj tę wiadomość.</p>
-        `,
-                text: `Potwierdź rejestrację: ${confirmUrl}`,
-            });
-        } catch (mailErr) {
-            await supabaseAdmin.auth.admin.deleteUser(userId);
-            await supabase.from('companies').delete().eq('id', companyData.id);
-            const msg = mailErr instanceof Error ? mailErr.message : String(mailErr);
-            throw new InternalServerErrorException(`Nie udało się wysłać maila aktywacyjnego: ${msg}`);
-        }
+        // 4) Wysyłka w tle z limitem czasu (rejestracja nie „wisi”)
+        (async () => {
+            try {
+                await Promise.race([
+                    this.sendActivationEmail(registerDto.email, registerDto.firstName, confirmUrl),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP timeout')), 12_000)),
+                ]);
+            } catch (e) {
+                // zaloguj, ale nie psuj rejestracji
+                console.error('[MAILER] activation email failed:', (e as Error).message);
+            }
+        })();
 
-        return { message: 'Rejestracja udana. Sprawdź e-mail, aby aktywować konto.' };
+        return {
+            message:
+                'Rejestracja udana. Jeśli nie widzisz maila, poczekaj chwilę lub skorzystaj z opcji "Wyślij ponownie".',
+        };
     }
 
     async login(loginDto: LoginDto) {
@@ -105,6 +119,7 @@ export class AuthService {
             email: loginDto.email,
             password: loginDto.password,
         });
+
         if (error) {
             if (error.message === 'Email not confirmed') {
                 throw new UnauthorizedException('Konto nie zostało aktywowane. Sprawdź e-mail.');
@@ -139,6 +154,7 @@ export class AuthService {
         return data;
     }
 
+    // Ponowna wysyłka linku – użyj na froncie przycisku „Wyślij ponownie”
     async resendVerification(email: string) {
         const supabaseAdmin = this.supabaseService.getAdminClient();
         const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
@@ -146,21 +162,13 @@ export class AuthService {
         const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
             type: 'signup',
             email,
-            password: randomUUID(), // tymczasowe hasło
+            password: randomUUID(), // tymczasowe
             options: { redirectTo: `${appUrl}/auth/confirm` },
         });
         if (linkErr) throw new InternalServerErrorException(linkErr.message);
 
         const confirmUrl = linkData?.properties?.action_link;
-        const from = this.config.get<string>('MAIL_FROM') || 'no-reply@yourapp.local';
-
-        await this.mailer.sendMail({
-            from,
-            to: email,
-            subject: 'Potwierdź swój adres e-mail (ponownie)',
-            html: `<p>Kliknij, aby potwierdzić: <a href="${confirmUrl}">${confirmUrl}</a></p>`,
-            text: `Potwierdź rejestrację: ${confirmUrl}`,
-        });
+        await this.sendActivationEmail(email, '', confirmUrl!);
 
         return { message: 'Nowy link aktywacyjny został wysłany.' };
     }
