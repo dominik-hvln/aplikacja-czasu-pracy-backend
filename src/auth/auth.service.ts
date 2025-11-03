@@ -19,60 +19,72 @@ export class AuthService {
     async register(registerDto: RegisterDto) {
         // Używamy klienta PUBLICZNEGO do operacji publicznych
         const supabase = this.supabaseService.getClient();
-        // Używamy klienta ADMINA do operacji na tabelach z RLS (jeśli trzeba)
+        // Używamy klienta ADMINA do operacji na tabelach z RLS
         const supabaseAdmin = this.supabaseService.getAdminClient();
 
-        // 1. Stwórz firmę
+        // 1. Stwórz firmę (klientem publicznym)
         const { data: companyData, error: companyError } = await supabase
             .from('companies')
             .insert({ name: registerDto.companyName })
             .select()
             .single();
-        if (companyError) throw new InternalServerErrorException(companyError.message);
+        if (companyError)
+            throw new InternalServerErrorException(companyError.message);
 
-        // 2. Stwórz użytkownika (Supabase Auth)
+        // 2. Stwórz użytkownika (Supabase Auth, klientem publicznym)
+        const appUrl =
+            process.env.APP_URL?.replace(/\/+$/, '') || 'http://localhost:3000';
+
         const { data: authData, error: authError } = await supabase.auth.signUp({
             email: registerDto.email,
             password: registerDto.password,
+            // 🔑 KLUCZOWA ZMIANA: ustaw redirect URL do Twojej strony potwierdzenia
+            options: {
+                emailRedirectTo: `${appUrl}/auth/confirm`,
+            },
         });
 
         if (authError) {
             // Cofnij stworzenie firmy
             await supabase.from('companies').delete().eq('id', companyData.id);
             if (authError.message.includes('User already registered')) {
-                throw new ConflictException('Użytkownik o tym adresie e-mail już istnieje.');
+                throw new ConflictException(
+                    'Użytkownik o tym adresie e-mail już istnieje.',
+                );
             }
+            // Błąd "Email rate limit exceeded" zostanie przechwycony tutaj
             throw new InternalServerErrorException(authError.message);
         }
 
         if (!authData || !authData.user) {
             await supabase.from('companies').delete().eq('id', companyData.id);
-            throw new InternalServerErrorException('Nie udało się utworzyć danych użytkownika.');
+            throw new InternalServerErrorException(
+                'Nie udało się utworzyć danych użytkownika.',
+            );
         }
 
-        // 3. ✅ OSTATECZNA POPRAWKA: Używamy INSERT zamiast UPDATE
-        // Ponieważ wyłączyliśmy trigger, teraz to my jesteśmy odpowiedzialni
-        // za stworzenie wiersza w public.users.
-        // Używamy klienta ADMINA, aby mieć pewność, że mamy uprawnienia do zapisu.
+        // 3. Zaktualizuj profil użytkownika (KLIENTEM ADMINA, aby ominąć RLS)
         const { error: profileError } = await supabaseAdmin
             .from('users')
-            .insert({
-                id: authData.user.id, // ID z auth.users
+            .update({
                 company_id: companyData.id,
                 first_name: registerDto.firstName,
                 last_name: registerDto.lastName,
                 role: 'admin',
                 email: registerDto.email,
-            });
+            })
+            .eq('id', authData.user.id); // Znajdź wiersz stworzony przez trigger
 
         if (profileError) {
-            // Jeśli tworzenie profilu się nie uda, usuń wszystko
+            // Jeśli aktualizacja profilu się nie uda, usuń wszystko
             await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
             await supabase.from('companies').delete().eq('id', companyData.id);
             throw new InternalServerErrorException(profileError.message);
         }
 
-        return { message: 'Rejestracja udana. Sprawdź e-mail, aby aktywować konto.' };
+        return {
+            message: 'Rejestracja udana. Sprawdź e-mail, aby aktywować konto.',
+        };
     }
 
     async login(loginDto: LoginDto) {
