@@ -3,15 +3,12 @@ import {
     InternalServerErrorException,
     ConflictException,
     UnauthorizedException,
-    Inject,
 } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { HttpService } from '@nestjs/axios';
-import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class AuthService {
@@ -19,13 +16,12 @@ export class AuthService {
         private readonly supabaseService: SupabaseService,
         private readonly jwtService: JwtService,
         private readonly config: ConfigService,
-        private readonly http: HttpService, // ← Resend przez HTTP
     ) {}
 
+    // Resend przez HTTPS (Node 18+)
     private async sendActivationEmailResend(to: string, firstName: string, confirmUrl: string) {
         const apiKey = this.config.get<string>('RESEND_API_KEY');
         if (!apiKey) {
-            // jawnie pokaż brak klucza zamiast laconicznego 500
             throw new InternalServerErrorException({
                 provider: 'resend',
                 reason: 'missing_api_key',
@@ -33,22 +29,22 @@ export class AuthService {
             });
         }
 
-        // Uwaga: Resend wymaga poprawnego from. Bez własnej domeny użyj:
-        // MAIL_FROM=onboarding@resend.dev (działa testowo)
         const fromHeader = this.config.get<string>('MAIL_FROM') || 'onboarding@resend.dev';
 
         const payload = {
-            from: fromHeader,             // np. "onboarding@resend.dev" lub "Nazwa <no-reply@twoja.pl>"
-            to,                           // pojedynczy email lub tablica
+            from: fromHeader,
+            to,
             subject: 'Potwierdź swój adres e-mail',
             html: `
-      <p>Cześć ${firstName || ''},</p>
-      <p>Dokończ rejestrację klikając w link poniżej:</p>
-      <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
-    `,
+        <p>Cześć ${firstName || ''},</p>
+        <p>Dokończ rejestrację klikając w link poniżej:</p>
+        <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
+        <p>Jeśli to nie Ty, zignoruj tę wiadomość.</p>
+      `,
             text: `Potwierdź rejestrację: ${confirmUrl}`,
         };
 
+        // WAŻNE: to jest HTTPS/443 – żadnego SMTP
         const res = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: {
@@ -59,14 +55,11 @@ export class AuthService {
         });
 
         const text = await res.text().catch(() => '');
-        // Log do serwera, żebyś miał ślad w Renderze
+        // Zaloguj dokładnie co zwrócił Resend (zobaczysz to w Render logs)
         console.log('[RESEND] status:', res.status, 'body:', text);
 
         if (!res.ok) {
-            // Zwróć do klienta precyzyjny powód (na czas debugowania)
-            // Najczęstsze:
-            // 401 → zły/brak klucza
-            // 422 → invalid_from_address / domain not verified / zabronione adresy testowe
+            // 401 → zły/brak klucza; 422 → invalid_from / domain not verified / zły adres docelowy
             throw new InternalServerErrorException({
                 provider: 'resend',
                 status: res.status,
@@ -75,8 +68,8 @@ export class AuthService {
                     res.status === 401
                         ? 'Sprawdź RESEND_API_KEY.'
                         : res.status === 422
-                            ? 'Sprawdź MAIL_FROM (użyj onboarding@resend.dev) i adres docelowy (nie używaj @example.com / @test.com).'
-                            : 'Sprawdź logi powyżej.',
+                            ? 'Użyj MAIL_FROM=onboarding@resend.dev (bez własnej domeny) i prawdziwego adresu odbiorcy.'
+                            : 'Sprawdź log powyżej.',
             });
         }
 
@@ -91,7 +84,6 @@ export class AuthService {
         return data;
     }
 
-
     async register(registerDto: RegisterDto) {
         const supabase = this.supabaseService.getClient();
         const supabaseAdmin = this.supabaseService.getAdminClient();
@@ -104,14 +96,14 @@ export class AuthService {
             .single();
         if (companyError) throw new InternalServerErrorException(companyError.message);
 
-        // 2) Link aktywacyjny od Supabase (nie wysyła maila)
+        // 2) Link aktywacyjny (Supabase tworzy usera i zwraca action_link; my wysyłamy mail)
         const appUrl =
             this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
 
         const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
             type: 'signup',
             email: registerDto.email,
-            password: registerDto.password, // wymagane
+            password: registerDto.password,
             options: {
                 data: {
                     first_name: registerDto.firstName,
@@ -135,7 +127,7 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się wygenerować linku aktywacyjnego.');
         }
 
-        // 3) Profil (ADMIN, omijamy RLS)
+        // 3) Profil (ADMIN, RLS bypass)
         const { error: profileError } = await supabaseAdmin
             .from('users')
             .update({
@@ -152,7 +144,7 @@ export class AuthService {
             throw new InternalServerErrorException(profileError.message);
         }
 
-        // 4) Wysyłka maila przez Resend (HTTP)
+        // 4) Wysyłka maila przez Resend (HTTPS — żadnego SMTP)
         await this.sendActivationEmailResend(registerDto.email, registerDto.firstName, confirmUrl);
 
         return { message: 'Rejestracja udana. Sprawdź e-mail, aby aktywować konto.' };
@@ -199,13 +191,12 @@ export class AuthService {
         return data;
     }
 
-    // (opcjonalnie) ponowna wysyłka – również Resend
+    // (opcjonalnie) ponowna wysyłka – magic link + Resend
     async resendVerification(email: string) {
         const supabaseAdmin = this.supabaseService.getAdminClient();
         const appUrl =
             this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
 
-        // wygeneruj świeży link (bez hasła – dla już istniejącego usera użyjemy magic linka)
         const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
             type: 'magiclink',
             email,
