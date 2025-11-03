@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, UseGuards, Req } from '@nestjs/common';
+import {Controller, Post, Body, Get, UseGuards, Req, Query, BadRequestException} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -23,4 +23,11 @@ export class AuthController {
     getProfile(@Req() req) {
         return req.user;
     }
+    @Get('resend-test')
+    resendTest(@Query('to') to: string) {
+        if (!to) throw new BadRequestException('Missing ?to=email');
+        // Wygeneruje magic link i wyśle mejla przez Resend (z auth.service.ts)
+        return this.authService.resendVerification(to);
+    }
+
 }

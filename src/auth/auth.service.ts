@@ -25,41 +25,72 @@ export class AuthService {
     private async sendActivationEmailResend(to: string, firstName: string, confirmUrl: string) {
         const apiKey = this.config.get<string>('RESEND_API_KEY');
         if (!apiKey) {
-            throw new InternalServerErrorException('Brak RESEND_API_KEY w konfiguracji.');
+            // jawnie pokaż brak klucza zamiast laconicznego 500
+            throw new InternalServerErrorException({
+                provider: 'resend',
+                reason: 'missing_api_key',
+                hint: 'Ustaw RESEND_API_KEY w env backendu.',
+            });
         }
 
-        // w trybie testowym można użyć od razu "onboarding@resend.dev"
+        // Uwaga: Resend wymaga poprawnego from. Bez własnej domeny użyj:
+        // MAIL_FROM=onboarding@resend.dev (działa testowo)
         const fromHeader = this.config.get<string>('MAIL_FROM') || 'onboarding@resend.dev';
 
         const payload = {
-            from: fromHeader,
-            to,
+            from: fromHeader,             // np. "onboarding@resend.dev" lub "Nazwa <no-reply@twoja.pl>"
+            to,                           // pojedynczy email lub tablica
             subject: 'Potwierdź swój adres e-mail',
             html: `
-        <p>Cześć ${firstName || ''},</p>
-        <p>Dokończ rejestrację klikając w link poniżej:</p>
-        <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
-        <p>Jeśli to nie Ty, zignoruj tę wiadomość.</p>
-      `,
+      <p>Cześć ${firstName || ''},</p>
+      <p>Dokończ rejestrację klikając w link poniżej:</p>
+      <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
+    `,
             text: `Potwierdź rejestrację: ${confirmUrl}`,
         };
 
-        const res = await firstValueFrom(
-            this.http.post('https://api.resend.com/emails', payload, {
-                headers: {
-                    Authorization: `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json',
-                },
-                // Resend działa po HTTPS:443 – brak problemów z blokadą SMTP
-            })
-        );
+        const res = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+        });
 
-        // Prosty sanity check
-        if (!res?.data?.id) {
-            throw new InternalServerErrorException('Resend nie zwrócił identyfikatora wiadomości.');
+        const text = await res.text().catch(() => '');
+        // Log do serwera, żebyś miał ślad w Renderze
+        console.log('[RESEND] status:', res.status, 'body:', text);
+
+        if (!res.ok) {
+            // Zwróć do klienta precyzyjny powód (na czas debugowania)
+            // Najczęstsze:
+            // 401 → zły/brak klucza
+            // 422 → invalid_from_address / domain not verified / zabronione adresy testowe
+            throw new InternalServerErrorException({
+                provider: 'resend',
+                status: res.status,
+                body: (() => { try { return JSON.parse(text); } catch { return text; } })(),
+                hint:
+                    res.status === 401
+                        ? 'Sprawdź RESEND_API_KEY.'
+                        : res.status === 422
+                            ? 'Sprawdź MAIL_FROM (użyj onboarding@resend.dev) i adres docelowy (nie używaj @example.com / @test.com).'
+                            : 'Sprawdź logi powyżej.',
+            });
         }
-        return res.data;
+
+        const data = (() => { try { return JSON.parse(text); } catch { return {}; } })();
+        if (!data?.id) {
+            throw new InternalServerErrorException({
+                provider: 'resend',
+                reason: 'missing_message_id',
+                raw: text,
+            });
+        }
+        return data;
     }
+
 
     async register(registerDto: RegisterDto) {
         const supabase = this.supabaseService.getClient();
