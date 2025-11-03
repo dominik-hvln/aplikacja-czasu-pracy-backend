@@ -6,6 +6,9 @@ import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './jwt.strategy';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import * as nodemailer from 'nodemailer';
+
+export const MAILER = 'MAILER';
 
 @Module({
     imports: [
@@ -23,6 +26,34 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
         }),
     ],
     controllers: [AuthController],
-    providers: [AuthService, JwtStrategy],
+    providers: [
+        AuthService,
+        JwtStrategy,
+        {
+            provide: MAILER,
+            useFactory: async (config: ConfigService) => {
+                const transporter = nodemailer.createTransport({
+                    host: config.get<string>('SMTP_HOST'),
+                    port: Number(config.get<string>('SMTP_PORT') ?? 587),
+                    secure: config.get<string>('SMTP_SECURE') === 'true',
+                    auth: config.get<string>('SMTP_USER')
+                        ? {
+                            user: config.get<string>('SMTP_USER'),
+                            pass: config.get<string>('SMTP_PASS'),
+                        }
+                        : undefined,
+                });
+
+                // Opcjonalnie: zweryfikuj transport przy starcie (nie blokuje startu)
+                try {
+                    await transporter.verify();
+                } catch (e) {
+                    console.warn('[MAILER] verify() failed:', (e as Error)?.message);
+                }
+                return transporter;
+            },
+            inject: [ConfigService],
+        },
+    ],
 })
 export class AuthModule {}
