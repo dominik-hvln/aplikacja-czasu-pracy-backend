@@ -1,4 +1,9 @@
-import { Injectable, InternalServerErrorException, ConflictException, UnauthorizedException } from '@nestjs/common';
+import {
+    Injectable,
+    InternalServerErrorException,
+    ConflictException,
+    UnauthorizedException,
+} from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -14,10 +19,10 @@ export class AuthService {
     async register(registerDto: RegisterDto) {
         // Używamy klienta PUBLICZNEGO do operacji publicznych
         const supabase = this.supabaseService.getClient();
-        // Używamy klienta ADMINA do operacji na tabelach z RLS
+        // Używamy klienta ADMINA do operacji na tabelach z RLS (jeśli trzeba)
         const supabaseAdmin = this.supabaseService.getAdminClient();
 
-        // 1. Stwórz firmę (klientem publicznym)
+        // 1. Stwórz firmę
         const { data: companyData, error: companyError } = await supabase
             .from('companies')
             .insert({ name: registerDto.companyName })
@@ -25,7 +30,7 @@ export class AuthService {
             .single();
         if (companyError) throw new InternalServerErrorException(companyError.message);
 
-        // 2. Stwórz użytkownika (Supabase Auth, klientem publicznym)
+        // 2. Stwórz użytkownika (Supabase Auth)
         const { data: authData, error: authError } = await supabase.auth.signUp({
             email: registerDto.email,
             password: registerDto.password,
@@ -37,7 +42,6 @@ export class AuthService {
             if (authError.message.includes('User already registered')) {
                 throw new ConflictException('Użytkownik o tym adresie e-mail już istnieje.');
             }
-            // Błąd "Email rate limit exceeded" zostanie przechwycony tutaj
             throw new InternalServerErrorException(authError.message);
         }
 
@@ -46,20 +50,23 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się utworzyć danych użytkownika.');
         }
 
-        // 3. Zaktualizuj profil użytkownika (KLIENTEM ADMINA, aby ominąć RLS)
+        // 3. ✅ OSTATECZNA POPRAWKA: Używamy INSERT zamiast UPDATE
+        // Ponieważ wyłączyliśmy trigger, teraz to my jesteśmy odpowiedzialni
+        // za stworzenie wiersza w public.users.
+        // Używamy klienta ADMINA, aby mieć pewność, że mamy uprawnienia do zapisu.
         const { error: profileError } = await supabaseAdmin
             .from('users')
-            .update({
+            .insert({
+                id: authData.user.id, // ID z auth.users
                 company_id: companyData.id,
                 first_name: registerDto.firstName,
                 last_name: registerDto.lastName,
                 role: 'admin',
                 email: registerDto.email,
-            })
-            .eq('id', authData.user.id); // Znajdź wiersz stworzony przez trigger
+            });
 
         if (profileError) {
-            // Jeśli aktualizacja profilu się nie uda, usuń wszystko
+            // Jeśli tworzenie profilu się nie uda, usuń wszystko
             await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
             await supabase.from('companies').delete().eq('id', companyData.id);
             throw new InternalServerErrorException(profileError.message);
@@ -77,7 +84,9 @@ export class AuthService {
 
         if (error) {
             if (error.message === 'Email not confirmed') {
-                throw new UnauthorizedException('Konto nie zostało aktywowane. Sprawdź e-mail.');
+                throw new UnauthorizedException(
+                    'Konto nie zostało aktywowane. Sprawdź e-mail.',
+                );
             }
             throw new UnauthorizedException('Nieprawidłowy e-mail lub hasło.');
         }
@@ -87,7 +96,8 @@ export class AuthService {
             .select('*')
             .eq('id', data.user.id)
             .single();
-        if (profileError) throw new InternalServerErrorException(profileError.message);
+        if (profileError)
+            throw new InternalServerErrorException(profileError.message);
 
         return { session: data.session, profile };
     }
@@ -103,9 +113,12 @@ export class AuthService {
 
     async updateUserPassword(userId: string, newPassword: string) {
         const supabaseAdmin = this.supabaseService.getAdminClient();
-        const { data, error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
-            password: newPassword,
-        });
+        const { data, error } = await supabaseAdmin.auth.admin.updateUserById(
+            userId,
+            {
+                password: newPassword,
+            },
+        );
         if (error) {
             console.error('Błąd aktualizacji hasła:', error);
             throw new InternalServerErrorException(error.message);
