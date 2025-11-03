@@ -130,14 +130,17 @@ export class AuthService {
         // 3) Profil (ADMIN, RLS bypass)
         const { error: profileError } = await supabaseAdmin
             .from('users')
-            .update({
-                company_id: companyData.id,
-                first_name: registerDto.firstName,
-                last_name: registerDto.lastName,
-                role: 'admin',
-                email: registerDto.email,
-            })
-            .eq('id', userId);
+            .upsert(
+                {
+                    id: userId, // ⬅️ KLUCZ GŁÓWNY!
+                    company_id: companyData.id,
+                    first_name: registerDto.firstName,
+                    last_name: registerDto.lastName,
+                    role: 'admin',
+                    email: registerDto.email,
+                },
+                { onConflict: 'id' }
+            );
         if (profileError) {
             await supabaseAdmin.auth.admin.deleteUser(userId);
             await supabase.from('companies').delete().eq('id', companyData.id);
