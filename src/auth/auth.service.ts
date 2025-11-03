@@ -3,6 +3,7 @@ import {
     InternalServerErrorException,
     ConflictException,
     UnauthorizedException,
+    Inject, // ⬅️ dodaj
 } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { RegisterDto } from './dto/register.dto';
@@ -10,8 +11,7 @@ import { LoginDto } from './dto/login.dto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import type { Transporter } from 'nodemailer';
-import { Inject } from '@nestjs/common';
-import { MAILER } from './auth.module';
+import { randomUUID } from 'crypto'; // (opcjonalnie do resend)
 
 @Injectable()
 export class AuthService {
@@ -19,40 +19,31 @@ export class AuthService {
         private readonly supabaseService: SupabaseService,
         private readonly jwtService: JwtService,
         private readonly config: ConfigService,
-        @Inject(MAILER) private readonly mailer: Transporter,
+        @Inject('MAILER') private readonly mailer: Transporter, // ⬅️ użyj stringowego tokena
     ) {}
 
     async register(registerDto: RegisterDto) {
-        const supabase = this.supabaseService.getClient();        // public
-        const supabaseAdmin = this.supabaseService.getAdminClient(); // admin
+        const supabase = this.supabaseService.getClient();
+        const supabaseAdmin = this.supabaseService.getAdminClient();
 
-        // 1) Firma
         const { data: companyData, error: companyError } = await supabase
             .from('companies')
             .insert({ name: registerDto.companyName })
             .select()
             .single();
-        if (companyError) {
-            throw new InternalServerErrorException(companyError.message);
-        }
+        if (companyError) throw new InternalServerErrorException(companyError.message);
 
-        const appUrl =
-            this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+        const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
 
-        // 2) Wygeneruj link aktywacyjny (to tworzy użytkownika, ale NIE wysyła maila)
         const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
             type: 'signup',
             email: registerDto.email,
-            password: registerDto.password, // ← WYMAGANE
+            password: registerDto.password,                 // wymagane
             options: {
-                data: {
-                    first_name: registerDto.firstName,
-                    last_name: registerDto.lastName,
-                },
+                data: { first_name: registerDto.firstName, last_name: registerDto.lastName },
                 redirectTo: `${appUrl}/auth/confirm`,
             },
         });
-
         if (linkErr) {
             await supabase.from('companies').delete().eq('id', companyData.id);
             if (linkErr.message?.includes('User already registered')) {
@@ -68,7 +59,6 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się wygenerować linku aktywacyjnego.');
         }
 
-        // 3) Uzupełnij profil (tabela users) – ADMIN (RLS bypass)
         const { error: profileError } = await supabaseAdmin
             .from('users')
             .update({
@@ -85,7 +75,6 @@ export class AuthService {
             throw new InternalServerErrorException(profileError.message);
         }
 
-        // 4) Wyślij maila z linkiem aktywacyjnym (Nodemailer)
         const from = this.config.get<string>('MAIL_FROM') || 'no-reply@yourapp.local';
         try {
             await this.mailer.sendMail({
@@ -96,7 +85,7 @@ export class AuthService {
           <p>Cześć ${registerDto.firstName || ''},</p>
           <p>Dokończ rejestrację klikając w link poniżej:</p>
           <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
-          <p>Link wygasa zgodnie z ustawieniami Supabase.</p>
+          <p>Jeśli to nie Ty, zignoruj tę wiadomość.</p>
         `,
                 text: `Potwierdź rejestrację: ${confirmUrl}`,
             });
@@ -116,7 +105,6 @@ export class AuthService {
             email: loginDto.email,
             password: loginDto.password,
         });
-
         if (error) {
             if (error.message === 'Email not confirmed') {
                 throw new UnauthorizedException('Konto nie zostało aktywowane. Sprawdź e-mail.');
@@ -151,16 +139,14 @@ export class AuthService {
         return data;
     }
 
-    // (opcjonalnie) ponowna wysyłka
     async resendVerification(email: string) {
         const supabaseAdmin = this.supabaseService.getAdminClient();
-        const appUrl =
-            this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+        const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
 
         const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
             type: 'signup',
             email,
-            password: crypto.randomUUID(), // tymczasowe hasło; i tak user zmieni je po potwierdzeniu
+            password: randomUUID(), // tymczasowe hasło
             options: { redirectTo: `${appUrl}/auth/confirm` },
         });
         if (linkErr) throw new InternalServerErrorException(linkErr.message);

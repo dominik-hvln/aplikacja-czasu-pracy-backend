@@ -8,14 +8,11 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
-export const MAILER = 'MAILER';
-
 @Module({
     imports: [
         SupabaseModule,
         PassportModule.register({ defaultStrategy: 'jwt' }),
         ConfigModule,
-
         JwtModule.registerAsync({
             imports: [ConfigModule],
             inject: [ConfigService],
@@ -30,25 +27,18 @@ export const MAILER = 'MAILER';
         AuthService,
         JwtStrategy,
         {
-            provide: MAILER,
+            provide: 'MAILER', // ⬅️ token jako string (bez eksportu/importu z modułu)
             useFactory: async (config: ConfigService) => {
                 const transporter = nodemailer.createTransport({
                     host: config.get<string>('SMTP_HOST'),
                     port: Number(config.get<string>('SMTP_PORT') ?? 587),
                     secure: config.get<string>('SMTP_SECURE') === 'true',
                     auth: config.get<string>('SMTP_USER')
-                        ? {
-                            user: config.get<string>('SMTP_USER'),
-                            pass: config.get<string>('SMTP_PASS'),
-                        }
+                        ? { user: config.get<string>('SMTP_USER'), pass: config.get<string>('SMTP_PASS') }
                         : undefined,
                 });
-
-                // Opcjonalnie: zweryfikuj transport przy starcie (nie blokuje startu)
-                try {
-                    await transporter.verify();
-                } catch (e) {
-                    console.warn('[MAILER] verify() failed:', (e as Error)?.message);
+                try { await transporter.verify(); } catch (e) {
+                    console.warn('[MAILER] verify failed:', (e as Error).message);
                 }
                 return transporter;
             },
