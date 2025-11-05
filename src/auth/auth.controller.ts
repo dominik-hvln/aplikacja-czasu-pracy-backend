@@ -3,6 +3,8 @@ import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import {ForgotPasswordDto} from "./dto/forgot-password.dto";
+import {ResetPasswordDto} from "./dto/reset-password.dto";
 
 @Controller('auth') // Wszystkie trasy w tym kontrolerze będą zaczynać się od /auth
 export class AuthController {
@@ -29,5 +31,12 @@ export class AuthController {
         // Wygeneruje magic link i wyśle mejla przez Resend (z auth.service.ts)
         return this.authService.resendVerification(to);
     }
-
+    @Post('forgot')
+    forgot(@Body() dto: ForgotPasswordDto) {
+        return this.authService.forgotPassword(dto);
+    }
+    @Post('password/reset')
+    reset(@Body() dto: ResetPasswordDto) {
+        return this.authService.resetPassword(dto);
+    }
 }

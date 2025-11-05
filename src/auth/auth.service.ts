@@ -7,6 +7,8 @@ import {
 import { SupabaseService } from '../supabase/supabase.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 
@@ -18,97 +20,50 @@ export class AuthService {
         private readonly config: ConfigService,
     ) {}
 
-    // Resend przez HTTPS (Node 18+)
-    private async sendActivationEmailResend(to: string, firstName: string, confirmUrl: string) {
+    // === WYSYŁKA MAILI przez RESEND (HTTPS) ===
+    private async sendResendEmail(to: string, subject: string, html: string, text: string) {
         const apiKey = this.config.get<string>('RESEND_API_KEY');
         if (!apiKey) {
-            throw new InternalServerErrorException({
-                provider: 'resend',
-                reason: 'missing_api_key',
-                hint: 'Ustaw RESEND_API_KEY w env backendu.',
-            });
+            throw new InternalServerErrorException('Brak RESEND_API_KEY w konfiguracji.');
         }
-
         const fromHeader = this.config.get<string>('MAIL_FROM') || 'onboarding@resend.dev';
 
-        const payload = {
-            from: fromHeader,
-            to,
-            subject: 'Potwierdź swój adres e-mail',
-            html: `
-        <p>Cześć ${firstName || ''},</p>
-        <p>Dokończ rejestrację klikając w link poniżej:</p>
-        <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
-        <p>Jeśli to nie Ty, zignoruj tę wiadomość.</p>
-      `,
-            text: `Potwierdź rejestrację: ${confirmUrl}`,
-        };
-
-        // WAŻNE: to jest HTTPS/443 – żadnego SMTP
         const res = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({ from: fromHeader, to, subject, html, text }),
         });
 
-        const text = await res.text().catch(() => '');
-        // Zaloguj dokładnie co zwrócił Resend (zobaczysz to w Render logs)
-        console.log('[RESEND] status:', res.status, 'body:', text);
-
+        const body = await res.text().catch(() => '');
         if (!res.ok) {
-            // 401 → zły/brak klucza; 422 → invalid_from / domain not verified / zły adres docelowy
-            throw new InternalServerErrorException({
-                provider: 'resend',
-                status: res.status,
-                body: (() => { try { return JSON.parse(text); } catch { return text; } })(),
-                hint:
-                    res.status === 401
-                        ? 'Sprawdź RESEND_API_KEY.'
-                        : res.status === 422
-                            ? 'Użyj MAIL_FROM=onboarding@resend.dev (bez własnej domeny) i prawdziwego adresu odbiorcy.'
-                            : 'Sprawdź log powyżej.',
-            });
+            // 401 → zły/brak klucza; 422 → invalid_from lub niezweryfikowana domena
+            throw new InternalServerErrorException(
+                `Resend error ${res.status}: ${body || 'brak treści'}`
+            );
         }
-
-        const data = (() => { try { return JSON.parse(text); } catch { return {}; } })();
-        if (!data?.id) {
-            throw new InternalServerErrorException({
-                provider: 'resend',
-                reason: 'missing_message_id',
-                raw: text,
-            });
-        }
-        return data;
+        return body;
     }
 
+    // === REJESTRACJA (jak dotąd) ===
     async register(registerDto: RegisterDto) {
         const supabase = this.supabaseService.getClient();
         const supabaseAdmin = this.supabaseService.getAdminClient();
 
-        // 1) Firma
         const { data: companyData, error: companyError } = await supabase
-            .from('companies')
-            .insert({ name: registerDto.companyName })
-            .select()
-            .single();
+            .from('companies').insert({ name: registerDto.companyName }).select().single();
         if (companyError) throw new InternalServerErrorException(companyError.message);
 
-        // 2) Link aktywacyjny (Supabase tworzy usera i zwraca action_link; my wysyłamy mail)
-        const appUrl =
-            this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+        const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
 
         const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
             type: 'signup',
             email: registerDto.email,
             password: registerDto.password,
             options: {
-                data: {
-                    first_name: registerDto.firstName,
-                    last_name: registerDto.lastName,
-                },
+                data: { first_name: registerDto.firstName, last_name: registerDto.lastName },
                 redirectTo: `${appUrl}/auth/confirm`,
             },
         });
@@ -127,12 +82,13 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się wygenerować linku aktywacyjnego.');
         }
 
-        // 3) Profil (ADMIN, RLS bypass)
-        const { error: profileError } = await supabaseAdmin
+        // BEZPIECZNIE: upsert profilu (jeśli trigger nie zadziała)
+        const supabaseAdminDb = this.supabaseService.getAdminClient();
+        const { error: profileError } = await supabaseAdminDb
             .from('users')
             .upsert(
                 {
-                    id: userId, // ⬅️ KLUCZ GŁÓWNY!
+                    id: userId,
                     company_id: companyData.id,
                     first_name: registerDto.firstName,
                     last_name: registerDto.lastName,
@@ -147,12 +103,22 @@ export class AuthService {
             throw new InternalServerErrorException(profileError.message);
         }
 
-        // 4) Wysyłka maila przez Resend (HTTPS — żadnego SMTP)
-        await this.sendActivationEmailResend(registerDto.email, registerDto.firstName, confirmUrl);
+        // Mail aktywacyjny przez Resend
+        await this.sendResendEmail(
+            registerDto.email,
+            'Potwierdź swój adres e-mail',
+            `
+        <p>Cześć ${registerDto.firstName || ''},</p>
+        <p>Dokończ rejestrację klikając w link poniżej:</p>
+        <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
+      `,
+            `Potwierdź rejestrację: ${confirmUrl}`
+        );
 
         return { message: 'Rejestracja udana. Sprawdź e-mail, aby aktywować konto.' };
     }
 
+    // === LOGOWANIE (jak dotąd) ===
     async login(loginDto: LoginDto) {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -168,49 +134,93 @@ export class AuthService {
         }
 
         const { data: profile, error: profileError } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', data.user.id)
-            .single();
+            .from('users').select('*').eq('id', data.user.id).single();
         if (profileError) throw new InternalServerErrorException(profileError.message);
 
         return { session: data.session, profile };
     }
 
-    async sendPasswordResetEmail(email: string, redirectTo: string) {
-        const supabase = this.supabaseService.getClient();
-        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
-        if (error) throw new InternalServerErrorException(error.message);
-        return { message: 'E-mail z linkiem do resetu hasła został wysłany.' };
-    }
-
-    async updateUserPassword(userId: string, newPassword: string) {
+    // === 1) „Zapomniałem hasło” — generujemy recovery link i wysyłamy mailem przez Resend ===
+    async forgotPassword(dto: ForgotPasswordDto) {
         const supabaseAdmin = this.supabaseService.getAdminClient();
-        const { data, error } = await supabaseAdmin.auth.admin.updateUserById(userId, { password: newPassword });
-        if (error) {
-            console.error('Błąd aktualizacji hasła:', error);
-            throw new InternalServerErrorException(error.message);
+        const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+
+        // Nie zdradzamy, czy email istnieje — zawsze „OK”
+        try {
+            const { data: linkData, error } = await supabaseAdmin.auth.admin.generateLink({
+                type: 'recovery',
+                email: dto.email,
+                options: { redirectTo: `${appUrl}/auth/reset` },
+            });
+            if (error) throw error;
+
+            const resetUrl = linkData?.properties?.action_link;
+            if (!resetUrl) {
+                // „zjadamy” szczegóły, ale logujemy na serwerze
+                console.warn('[forgotPassword] Brak action_link w generateLink');
+                return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu hasła.' };
+            }
+
+            await this.sendResendEmail(
+                dto.email,
+                'Reset hasła',
+                `
+          <p>Otrzymaliśmy prośbę o zresetowanie hasła.</p>
+          <p>Kliknij w link, aby ustawić nowe hasło:</p>
+          <p><a href="${resetUrl}" target="_blank" rel="noopener noreferrer">${resetUrl}</a></p>
+          <p>Jeśli to nie Ty, zignoruj tę wiadomość.</p>
+        `,
+                `Zresetuj hasło: ${resetUrl}`
+            );
+        } catch (e) {
+            // nie zdradzamy szczegółów; zostawiamy ten sam komunikat
+            console.warn('[forgotPassword] error:', e instanceof Error ? e.message : e);
         }
-        return data;
+        return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu hasła.' };
     }
 
-    // (opcjonalnie) ponowna wysyłka – magic link + Resend
+    // === 2) Ustawienie nowego hasła po kliknięciu w link (token z URL) ===
+    async resetPassword(dto: ResetPasswordDto) {
+        const supabase = this.supabaseService.getClient();      // public client
+        const supabaseAdmin = this.supabaseService.getAdminClient(); // admin
+
+        // Z tokenu „recovery” pobierz usera (bez sesji)
+        const { data: userData, error: getUserErr } = await supabase.auth.getUser(dto.token);
+        if (getUserErr || !userData?.user?.id) {
+            throw new UnauthorizedException('Token jest nieprawidłowy lub wygasł.');
+        }
+        const userId = userData.user.id;
+
+        // Zmień hasło jako admin (bez logowania użytkownika)
+        const { error: updErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+            password: dto.password,
+        });
+        if (updErr) {
+            throw new InternalServerErrorException('Nie udało się zaktualizować hasła.');
+        }
+
+        return { message: 'Hasło zostało zaktualizowane. Możesz się zalogować.' };
+    }
+
+    // (opcjonalnie) Reset przez magic link + Resend (re-send)
     async resendVerification(email: string) {
         const supabaseAdmin = this.supabaseService.getAdminClient();
-        const appUrl =
-            this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
-
-        const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
+        const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+        const { data: linkData, error } = await supabaseAdmin.auth.admin.generateLink({
             type: 'magiclink',
             email,
             options: { redirectTo: `${appUrl}/auth/confirm` },
         });
-        if (linkErr) throw new InternalServerErrorException(linkErr.message);
-
+        if (error) throw new InternalServerErrorException(error.message);
         const confirmUrl = linkData?.properties?.action_link;
-        if (!confirmUrl) throw new InternalServerErrorException('Nie udało się wygenerować linku.');
-
-        await this.sendActivationEmailResend(email, '', confirmUrl);
-        return { message: 'Nowy link aktywacyjny został wysłany.' };
+        if (confirmUrl) {
+            await this.sendResendEmail(
+                email,
+                'Potwierdź adres e-mail',
+                `<p>Kliknij, aby potwierdzić: <a href="${confirmUrl}">${confirmUrl}</a></p>`,
+                `Potwierdź: ${confirmUrl}`
+            );
+        }
+        return { message: 'Jeśli konto istnieje, wysłaliśmy nowy link.' };
     }
 }
