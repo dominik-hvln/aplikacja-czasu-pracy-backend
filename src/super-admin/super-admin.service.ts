@@ -7,21 +7,29 @@ export class SuperAdminService {
 
     async getAllCompanies() {
         const supabase = this.supabaseService.getClient();
-        const { data, error } = await supabase.from('companies').select('*');
+        // Pobieramy wszystkie firmy
+        const { data, error } = await supabase
+            .from('companies')
+            .select('*')
+            .order('created_at', { ascending: false }); // Najnowsze na górze
+
         if (error) {
-            throw new InternalServerErrorException(error.message);
+            throw new InternalServerErrorException(`Błąd pobierania firm: ${error.message}`);
         }
         return data;
     }
 
     async getAllUsers() {
         const supabase = this.supabaseService.getClient();
+        // Pobieramy userów. Skoro email jest w tabeli, po prostu go wybieramy.
+        // Jeśli masz relację w bazie, możemy też pobrać nazwę firmy: .select('*, companies(name)')
         const { data, error } = await supabase
-            .from('users') // Upewnij się, że tak nazywa się Twoja tabela z userami
-            .select('*');
+            .from('users')
+            .select('*')
+            .order('created_at', { ascending: false });
 
         if (error) {
-            throw new InternalServerErrorException(error.message);
+            throw new InternalServerErrorException(`Błąd pobierania użytkowników: ${error.message}`);
         }
         return data;
     }
