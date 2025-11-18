@@ -14,4 +14,10 @@ export class SuperAdminController {
     getAllCompanies() {
         return this.superAdminService.getAllCompanies();
     }
+
+    @Get('users')
+    @Roles(Role.SuperAdmin)
+    getAllUsers() {
+        return this.superAdminService.getAllUsers();
+    }
 }

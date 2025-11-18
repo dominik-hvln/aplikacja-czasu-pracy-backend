@@ -13,4 +13,16 @@ export class SuperAdminService {
         }
         return data;
     }
+
+    async getAllUsers() {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('users') // Upewnij się, że tak nazywa się Twoja tabela z userami
+            .select('*');
+
+        if (error) {
+            throw new InternalServerErrorException(error.message);
+        }
+        return data;
+    }
 }
