@@ -14,6 +14,7 @@ import { TaskAssignmentsModule } from './task-assignments/task-assignments.modul
 import { ActivityModule } from './activity/activity.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import {ReportTemplatesModule} from "./report-templates/report-templates.module";
+import {ReportsModule} from "./reports/reports.module";
 
 @Module({
     imports: [
@@ -30,6 +31,7 @@ import {ReportTemplatesModule} from "./report-templates/report-templates.module"
         ActivityModule,
         DashboardModule,
         ReportTemplatesModule,
+        ReportsModule,
     ],
     controllers: [AppController],
     providers: [AppService],
