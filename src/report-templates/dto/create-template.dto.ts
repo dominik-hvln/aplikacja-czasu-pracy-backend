@@ -1,28 +1,27 @@
-import { IsString, IsNotEmpty, IsArray, ValidateNested, IsEnum, IsBoolean, IsOptional, IsUUID } from 'class-validator';
+import { IsString, IsNotEmpty, IsArray, ValidateNested, IsEnum, IsBoolean, IsOptional, IsUUID, IsObject } from 'class-validator';
 import { Type } from 'class-transformer';
 
-// Typy pól, jakie pracownik będzie mógł uzupełnić
 export enum ReportFieldType {
-    TEXT = 'text',           // Krótki tekst
-    TEXTAREA = 'textarea',   // Długi opis
-    NUMBER = 'number',       // Liczba (np. zużyte materiały)
-    CHECKBOX = 'checkbox',   // Tak/Nie
-    PHOTO = 'photo',         // Zdjęcie z telefonu
-    SECTION = 'section',     // Nagłówek sekcji (do wyglądu)
-    SIGNATURE = 'signature', // Podpis klienta
+    TEXT = 'text',
+    TEXTAREA = 'textarea',
+    NUMBER = 'number',
+    CHECKBOX = 'checkbox',
+    PHOTO = 'photo',
+    SECTION = 'section',
+    SIGNATURE = 'signature',
 }
 
 export class ReportFieldDto {
     @IsString()
     @IsNotEmpty()
-    id: string; // Unikalne ID pola (np. "field_123"), potrzebne do DndKit
+    id: string;
 
     @IsEnum(ReportFieldType)
     type: ReportFieldType;
 
     @IsString()
     @IsNotEmpty()
-    label: string; // Np. "Opis usterki"
+    label: string;
 
     @IsBoolean()
     @IsOptional()
@@ -31,6 +30,17 @@ export class ReportFieldDto {
     @IsString()
     @IsOptional()
     placeholder?: string;
+}
+
+// ✅ Nowa klasa dla stylu
+export class TemplateStyleDto {
+    @IsString()
+    @IsOptional()
+    primaryColor?: string;
+
+    @IsString()
+    @IsOptional()
+    headerText?: string;
 }
 
 export class CreateReportTemplateDto {
@@ -50,4 +60,10 @@ export class CreateReportTemplateDto {
     @ValidateNested({ each: true })
     @Type(() => ReportFieldDto)
     fields: ReportFieldDto[];
+
+    @IsObject()
+    @IsOptional()
+    @ValidateNested()
+    @Type(() => TemplateStyleDto)
+    style?: TemplateStyleDto; // ✅ Dodane
 }

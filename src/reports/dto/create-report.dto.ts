@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsUUID, IsObject, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsUUID, IsObject, IsOptional, IsEmail } from 'class-validator';
 
 export class CreateReportDto {
     @IsUUID()
@@ -15,9 +15,12 @@ export class CreateReportDto {
 
     @IsObject()
     @IsNotEmpty()
-    answers: Record<string, any>; // Klucz (ID Pola) -> Wartość (Odpowiedź)
+    answers: Record<string, any>;
 
-    // Opcjonalnie ID zadania, jeśli podpinasz pod zlecenie
+    @IsOptional()
+    @IsEmail()
+    clientEmail?: string; // ✅ Opcjonalny email do wysyłki PDF
+
     @IsUUID()
     @IsOptional()
     taskId?: string;

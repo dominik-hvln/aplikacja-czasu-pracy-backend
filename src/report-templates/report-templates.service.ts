@@ -15,7 +15,8 @@ export class ReportTemplatesService {
                 company_id: dto.companyId,
                 name: dto.name,
                 description: dto.description,
-                fields: dto.fields, // Supabase sam przekonwertuje to na JSONB
+                fields: dto.fields,
+                style: dto.style || { primaryColor: '#000000', headerText: '' }, // ✅ Zapisujemy styl
             })
             .select()
             .single();
