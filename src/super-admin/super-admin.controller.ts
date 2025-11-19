@@ -4,6 +4,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles, Role } from '../auth/roles.decorator';
 import { CreateCompanyDto } from './dto/create-company.dto';
+import { CreateSystemUserDto } from './dto/create-user.dto';
 
 @Controller('super-admin')
 @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -26,5 +27,11 @@ export class SuperAdminController {
     @Roles(Role.SuperAdmin)
     createCompany(@Body() createCompanyDto: CreateCompanyDto) {
         return this.superAdminService.createCompany(createCompanyDto);
+    }
+
+    @Post('users')
+    @Roles(Role.SuperAdmin)
+    createUser(@Body() createUserDto: CreateSystemUserDto) {
+        return this.superAdminService.createUser(createUserDto);
     }
 }

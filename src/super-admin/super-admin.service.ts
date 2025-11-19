@@ -1,6 +1,7 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, BadRequestException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
+import { CreateSystemUserDto } from './dto/create-user.dto';
 
 @Injectable()
 export class SuperAdminService {
@@ -48,5 +49,49 @@ export class SuperAdminService {
             throw new InternalServerErrorException(`Błąd tworzenia firmy: ${error.message}`);
         }
         return data;
+    }
+
+    async createUser(dto: CreateSystemUserDto) {
+        const supabase = this.supabaseService.getClient();
+        const adminClient = this.supabaseService.getAdminClient(); // Wymaga Service Role Key
+
+        // 1. Tworzymy użytkownika w Supabase Auth (baza logowania)
+        const { data: authUser, error: authError } = await adminClient.auth.admin.createUser({
+            email: dto.email,
+            password: dto.password,
+            email_confirm: true, // Od razu potwierdzamy email
+            user_metadata: {
+                first_name: dto.firstName,
+                last_name: dto.lastName,
+            },
+        });
+
+        if (authError) {
+            throw new BadRequestException(`Błąd Auth: ${authError.message}`);
+        }
+
+        if (!authUser.user) {
+            throw new InternalServerErrorException('Nie udało się utworzyć użytkownika Auth');
+        }
+
+        // 2. Wstawiamy profil do tabeli public.users
+        const { error: dbError } = await supabase
+            .from('users')
+            .insert({
+                id: authUser.user.id, // To samo ID co w Auth!
+                email: dto.email,
+                first_name: dto.firstName,
+                last_name: dto.lastName,
+                role: dto.role,
+                company_id: dto.companyId || null, // Przypisanie do firmy
+            });
+
+        if (dbError) {
+            // Opcjonalnie: Tutaj moglibyśmy usunąć konto z Auth, żeby nie śmiecić, ale na start wystarczy rzucić błąd
+            console.error('Błąd DB:', dbError);
+            throw new InternalServerErrorException(`Użytkownik Auth utworzony, ale błąd profilu: ${dbError.message}`);
+        }
+
+        return { message: 'Użytkownik utworzony pomyślnie', userId: authUser.user.id };
     }
 }
