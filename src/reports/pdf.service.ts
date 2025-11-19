@@ -1,19 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import PdfPrinter from 'pdfmake';
 import { TDocumentDefinitions } from 'pdfmake/interfaces';
+import * as path from 'path'; // ✅ Importujemy path
 
 @Injectable()
 export class PdfService {
     private printer: PdfPrinter;
 
     constructor() {
-        // Definiujemy fonty
+        // ✅ Definiujemy ścieżki do prawdziwych plików czcionek
         const fonts = {
             Roboto: {
-                normal: 'Helvetica',
-                bold: 'Helvetica-Bold',
-                italics: 'Helvetica-Oblique',
-                bolditalics: 'Helvetica-BoldOblique',
+                normal: path.join(__dirname, '../../fonts/Roboto-Regular.ttf'),
+                bold: path.join(__dirname, '../../fonts/Roboto-Medium.ttf'),
+                italics: path.join(__dirname, '../../fonts/Roboto-Regular.ttf'), // Fallback
+                bolditalics: path.join(__dirname, '../../fonts/Roboto-Medium.ttf'), // Fallback
             },
         };
         this.printer = new PdfPrinter(fonts);
@@ -21,21 +22,32 @@ export class PdfService {
 
     async generateReportPdf(report: any): Promise<Buffer> {
         const template = report.report_templates;
-        const style = template.style || { primaryColor: '#000000', headerText: 'RAPORT' };
+        // Pobieramy rozszerzone style
+        const style = template.style || {
+            primaryColor: '#000000',
+            headerText: 'RAPORT',
+            logoUrl: '',
+            footerText: ''
+        };
         const fields = template.fields as any[];
         const answers = report.answers;
 
-        // Budujemy treść PDF
+        // ✅ Przygotowanie Logo (jeśli jest URL)
+        let headerContent: any = {
+            text: style.headerText || template.name.toUpperCase(),
+            style: 'header',
+            alignment: 'right',
+            color: style.primaryColor,
+            margin: [0, 0, 0, 20],
+        };
+
+        // Jeśli user zdefiniował logo (na razie zakładamy publiczny URL lub base64,
+        // pdfmake pobierze to jeśli jest direct link, ale bezpieczniej w node.js to pobrać wcześniej.
+        // Dla uproszczenia MVP zostawmy tekst, ale przygotujmy miejsce w kodzie).
+
         const docDefinition: TDocumentDefinitions = {
             content: [
-                // Nagłówek
-                {
-                    text: style.headerText || template.name.toUpperCase(),
-                    style: 'header',
-                    alignment: 'right',
-                    color: style.primaryColor,
-                    margin: [0, 0, 0, 20],
-                },
+                headerContent,
                 // Tytuł i Data
                 {
                     text: report.title,
@@ -49,13 +61,12 @@ export class PdfService {
                     margin: [0, 0, 0, 20],
                 },
                 { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 2, lineColor: style.primaryColor }] },
-                { text: '', margin: [0, 0, 0, 20] }, // Odstęp
+                { text: '', margin: [0, 0, 0, 20] },
 
-                // ✅ Rzutujemy mapowanie na 'any', żeby uspokoić TypeScript w kwestii typów pdfmake
+                // Pola formularza
                 ...(fields.map((field) => {
                     const value = answers[field.id];
 
-                    // Obsługa sekcji
                     if (field.type === 'section') {
                         return {
                             text: field.label,
@@ -65,25 +76,26 @@ export class PdfService {
                         };
                     }
 
-                    // Obsługa zwykłych pól
                     let displayValue = value ? value.toString() : '-';
                     if (field.type === 'checkbox') displayValue = value ? 'TAK' : 'NIE';
-                    if (field.type === 'photo') displayValue = value ? `[Zdjęcie: ${value}]` : 'Brak zdjęcia';
+                    if (field.type === 'photo') displayValue = value ? `[Zdjęcie]` : 'Brak zdjęcia';
 
                     return {
                         columns: [
-                            { width: '40%', text: field.label, style: 'label' },
-                            { width: '60%', text: displayValue, style: 'value' },
+                            { width: '35%', text: field.label, style: 'label' },
+                            { width: '65%', text: displayValue, style: 'value' },
                         ],
                         margin: [0, 5, 0, 5],
+                        columnGap: 10
                     };
                 }) as any),
 
-                // Stopka z autorem
+                // Stopka
                 { text: '', margin: [0, 30, 0, 0] },
                 { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 1, lineColor: '#cccccc' }] },
                 {
-                    text: `Wygenerowano automatycznie z systemu Kadromierz.`,
+                    // ✅ Używamy customowej stopki zdefiniowanej przez Admina
+                    text: style.footerText || `Wygenerowano automatycznie z systemu Kadromierz.`,
                     style: 'footer',
                     margin: [0, 10, 0, 0],
                     alignment: 'center',
@@ -92,15 +104,15 @@ export class PdfService {
                 },
             ],
             styles: {
-                header: { fontSize: 16, bold: true },
-                title: { fontSize: 20, bold: true },
+                header: { fontSize: 18, bold: true },
+                title: { fontSize: 22, bold: true },
                 subtitle: { fontSize: 10 },
                 sectionHeader: { fontSize: 13, bold: true, decoration: 'underline' },
                 label: { fontSize: 10, bold: true, color: '#444444' },
                 value: { fontSize: 10 },
             },
             defaultStyle: {
-                font: 'Roboto',
+                font: 'Roboto', // ✅ Używamy naszego fontu
             },
         };
 
