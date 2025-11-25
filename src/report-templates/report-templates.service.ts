@@ -16,7 +16,8 @@ export class ReportTemplatesService {
                 name: dto.name,
                 description: dto.description,
                 fields: dto.fields,
-                style: dto.style || { primaryColor: '#000000', headerText: '' }, // ✅ Zapisujemy styl
+                layout: dto.layout || [], // ✅ ZAPISUJEMY LAYOUT
+                style: dto.style || { primaryColor: '#000000', headerText: '' },
             })
             .select()
             .single();

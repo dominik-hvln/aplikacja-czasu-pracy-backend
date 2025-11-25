@@ -1,20 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import PdfPrinter from 'pdfmake';
-import { TDocumentDefinitions } from 'pdfmake/interfaces';
-import * as path from 'path'; // ✅ Importujemy path
+import { TDocumentDefinitions, Content } from 'pdfmake/interfaces';
+import * as path from 'path';
 
 @Injectable()
 export class PdfService {
     private printer: PdfPrinter;
 
     constructor() {
-        // ✅ Definiujemy ścieżki do prawdziwych plików czcionek
         const fonts = {
             Roboto: {
                 normal: path.join(__dirname, '../../fonts/Roboto-Regular.ttf'),
                 bold: path.join(__dirname, '../../fonts/Roboto-Medium.ttf'),
-                italics: path.join(__dirname, '../../fonts/Roboto-Regular.ttf'), // Fallback
-                bolditalics: path.join(__dirname, '../../fonts/Roboto-Medium.ttf'), // Fallback
+                italics: path.join(__dirname, '../../fonts/Roboto-Regular.ttf'),
+                bolditalics: path.join(__dirname, '../../fonts/Roboto-Medium.ttf'),
             },
         };
         this.printer = new PdfPrinter(fonts);
@@ -22,80 +21,141 @@ export class PdfService {
 
     async generateReportPdf(report: any): Promise<Buffer> {
         const template = report.report_templates;
-        // Pobieramy rozszerzone style
-        const style = template.style || {
-            primaryColor: '#000000',
-            headerText: 'RAPORT',
-            logoUrl: '',
-            footerText: ''
-        };
-        const fields = template.fields as any[];
-        const answers = report.answers;
+        const globalStyle = template.style || { primaryColor: '#000000' };
+        const layout = template.layout as any[];
+        const fieldsDefinition = template.fields as any[];
+        const answers = report.answers || {};
 
-        // ✅ Przygotowanie Logo (jeśli jest URL)
-        let headerContent: any = {
-            text: style.headerText || template.name.toUpperCase(),
-            style: 'header',
-            alignment: 'right',
-            color: style.primaryColor,
-            margin: [0, 0, 0, 20],
+        const fieldsMap = new Map(fieldsDefinition.map(f => [f.id, f]));
+
+        // Rekurencyjna funkcja budująca layout
+        const buildLayout = (rows: any[]): Content[] => {
+            if (!rows || !Array.isArray(rows)) return [];
+
+            return rows.map((row) => {
+                const columns = row.columns.map((col: any) => {
+                    return {
+                        width: `${col.width}%`,
+                        stack: col.items.map((item: any) => renderItem(item)),
+                        margin: [5, 5, 5, 5]
+                    };
+                });
+
+                return {
+                    columns: columns,
+                    columnGap: 10,
+                    margin: [0, 5, 0, 5]
+                };
+            });
         };
 
-        // Jeśli user zdefiniował logo (na razie zakładamy publiczny URL lub base64,
-        // pdfmake pobierze to jeśli jest direct link, ale bezpieczniej w node.js to pobrać wcześniej.
-        // Dla uproszczenia MVP zostawmy tekst, ale przygotujmy miejsce w kodzie).
+        // Funkcja renderująca element
+        const renderItem = (item: any): Content => {
+            const style = item.style || {};
+
+            // Tekst statyczny
+            if (item.type === 'text') {
+                return {
+                    text: item.content || '',
+                    bold: style.bold,
+                    fontSize: style.fontSize || 10,
+                    color: style.color || '#000000',
+                    alignment: style.alignment || 'left',
+                    margin: [0, 2, 0, 2]
+                };
+            }
+
+            // Pole dynamiczne
+            if (item.type === 'field' && item.fieldId) {
+                const fieldDef = fieldsMap.get(item.fieldId);
+                const value = answers[item.fieldId];
+                const label = fieldDef ? fieldDef.label : 'Nieznane pole';
+
+                // ✅ OBSŁUGA TABELI
+                if (fieldDef?.type === 'table') {
+                    const columns = fieldDef.columns || ['Kolumna 1'];
+                    const rows = Array.isArray(value) ? value : []; // value to tablica wierszy z odpowiedzi
+
+                    return {
+                        stack: [
+                            { text: label, fontSize: 10, bold: true, margin: [0, 0, 0, 5] },
+                            {
+                                table: {
+                                    headerRows: 1,
+                                    widths: Array(columns.length).fill('*'), // Automatyczna szerokość
+                                    body: [
+                                        // Nagłówek tabeli (szare tło)
+                                        columns.map(colName => ({
+                                            text: colName,
+                                            bold: true,
+                                            fillColor: '#f3f4f6',
+                                            fontSize: 9
+                                        })),
+                                        // Wiersze z danymi (lub pusty wiersz jeśli brak danych)
+                                        ...(rows.length > 0 ? rows.map(row => {
+                                            return columns.map(colName => ({
+                                                text: row[colName] || '-',
+                                                fontSize: 9
+                                            }));
+                                        }) : [
+                                            // Placeholder pustego wiersza
+                                            columns.map(() => ({ text: '-', fontSize: 9, color: '#cccccc' }))
+                                        ])
+                                    ]
+                                },
+                                layout: 'lightHorizontalLines' // Styl linii w tabeli
+                            }
+                        ],
+                        margin: [0, 10, 0, 10]
+                    };
+                }
+
+                // Obsługa zwykłych pól
+                let displayValue = value ? value.toString() : '-';
+                if (fieldDef?.type === 'checkbox') displayValue = value ? 'TAK' : 'NIE';
+                if (fieldDef?.type === 'photo') displayValue = value ? `[Zdjęcie: ${value}]` : 'Brak zdjęcia';
+
+                return {
+                    stack: [
+                        { text: label, fontSize: 9, color: '#666666', bold: true },
+                        {
+                            text: displayValue,
+                            fontSize: style.fontSize || 11,
+                            color: style.color || '#000000',
+                            bold: style.bold,
+                            alignment: style.alignment || 'left'
+                        }
+                    ],
+                    margin: [0, 5, 0, 10]
+                };
+            }
+
+            return { text: '' };
+        };
 
         const docDefinition: TDocumentDefinitions = {
             content: [
-                headerContent,
-                // Tytuł i Data
+                {
+                    text: globalStyle.headerText || template.name.toUpperCase(),
+                    style: 'header',
+                    alignment: 'right',
+                    color: globalStyle.primaryColor,
+                    margin: [0, 0, 0, 20],
+                },
                 {
                     text: report.title,
                     style: 'title',
                     margin: [0, 0, 0, 5],
                 },
-                {
-                    text: `Data: ${new Date(report.created_at).toLocaleDateString('pl-PL')} | Autor: ${report.users?.first_name || ''} ${report.users?.last_name || ''}`,
-                    style: 'subtitle',
-                    color: '#666666',
-                    margin: [0, 0, 0, 20],
-                },
-                { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 2, lineColor: style.primaryColor }] },
+                { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 2, lineColor: globalStyle.primaryColor }] },
                 { text: '', margin: [0, 0, 0, 20] },
 
-                // Pola formularza
-                ...(fields.map((field) => {
-                    const value = answers[field.id];
+                ...buildLayout(layout), // ✅ Generowanie layoutu
 
-                    if (field.type === 'section') {
-                        return {
-                            text: field.label,
-                            style: 'sectionHeader',
-                            color: style.primaryColor,
-                            margin: [0, 15, 0, 5],
-                        };
-                    }
-
-                    let displayValue = value ? value.toString() : '-';
-                    if (field.type === 'checkbox') displayValue = value ? 'TAK' : 'NIE';
-                    if (field.type === 'photo') displayValue = value ? `[Zdjęcie]` : 'Brak zdjęcia';
-
-                    return {
-                        columns: [
-                            { width: '35%', text: field.label, style: 'label' },
-                            { width: '65%', text: displayValue, style: 'value' },
-                        ],
-                        margin: [0, 5, 0, 5],
-                        columnGap: 10
-                    };
-                }) as any),
-
-                // Stopka
                 { text: '', margin: [0, 30, 0, 0] },
                 { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 1, lineColor: '#cccccc' }] },
                 {
-                    // ✅ Używamy customowej stopki zdefiniowanej przez Admina
-                    text: style.footerText || `Wygenerowano automatycznie z systemu Kadromierz.`,
+                    text: globalStyle.footerText || `Wygenerowano automatycznie z systemu Kadromierz.`,
                     style: 'footer',
                     margin: [0, 10, 0, 0],
                     alignment: 'center',
@@ -106,13 +166,10 @@ export class PdfService {
             styles: {
                 header: { fontSize: 18, bold: true },
                 title: { fontSize: 22, bold: true },
-                subtitle: { fontSize: 10 },
-                sectionHeader: { fontSize: 13, bold: true, decoration: 'underline' },
-                label: { fontSize: 10, bold: true, color: '#444444' },
-                value: { fontSize: 10 },
+                footer: { fontSize: 9 },
             },
             defaultStyle: {
-                font: 'Roboto', // ✅ Używamy naszego fontu
+                font: 'Roboto',
             },
         };
 
