@@ -9,14 +9,14 @@ export class ReportsService {
     constructor(
         private readonly supabaseService: SupabaseService,
         private readonly pdfService: PdfService,
-        private readonly config: ConfigService, // Do pobrania kluczy Resend
+        private readonly config: ConfigService,
     ) {}
 
-    // Metoda pomocnicza do wysyłki maila (kopia logiki z auth.service.ts, żeby nie psuć Auth)
+    // Metoda pomocnicza do wysyłki maila (Resend przez fetch)
     private async sendEmailWithAttachment(to: string, subject: string, text: string, pdfBuffer: Buffer, filename: string) {
         const apiKey = this.config.get<string>('RESEND_API_KEY');
         if (!apiKey) {
-            console.warn('Brak RESEND_API_KEY. Nie wysłano maila.');
+            console.warn('⚠️ Brak RESEND_API_KEY. Nie wysłano maila.');
             return;
         }
         const fromHeader = this.config.get<string>('MAIL_FROM') || 'onboarding@resend.dev';
@@ -39,7 +39,7 @@ export class ReportsService {
                     attachments: [
                         {
                             filename: filename,
-                            content: contentArray, // Resend API przyjmuje buffer array w JSON
+                            content: contentArray,
                         },
                     ],
                 }),
@@ -47,12 +47,12 @@ export class ReportsService {
 
             if (!res.ok) {
                 const errBody = await res.text();
-                console.error(`Błąd wysyłki Resend: ${res.status} - ${errBody}`);
+                console.error(`❌ Błąd wysyłki Resend: ${res.status} - ${errBody}`);
             } else {
-                console.log(`Mail wysłany do: ${to}`);
+                console.log(`✅ Mail z raportem wysłany do: ${to}`);
             }
         } catch (e) {
-            console.error('Wyjątek przy wysyłce maila:', e);
+            console.error('❌ Wyjątek przy wysyłce maila:', e);
         }
     }
 
@@ -68,7 +68,7 @@ export class ReportsService {
                 user_id: userId,
                 title: dto.title,
                 answers: dto.answers,
-                client_email: dto.clientEmail || null, // Zapisujemy email klienta
+                client_email: dto.clientEmail || null,
             })
             .select(`
                 *,
@@ -81,7 +81,7 @@ export class ReportsService {
 
         // 2. Wygeneruj PDF i wyślij (jeśli podano email)
         if (report.client_email) {
-            // Nie czekamy (no await), żeby user dostał szybką odpowiedź w UI
+            // Uruchamiamy w tle (bez await), żeby nie blokować UI
             this.handlePdfProcess(report).catch(err => console.error('Błąd tła PDF:', err));
         }
 
@@ -89,7 +89,7 @@ export class ReportsService {
     }
 
     private async handlePdfProcess(report: any) {
-        console.log(`Generowanie PDF dla raportu ID: ${report.id}`);
+        console.log(`📄 Generowanie PDF dla raportu ID: ${report.id}`);
         const pdfBuffer = await this.pdfService.generateReportPdf(report);
 
         await this.sendEmailWithAttachment(
@@ -121,7 +121,7 @@ export class ReportsService {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
             .from('reports')
-            .select(`*, report_templates(fields, style)`) // Pobieramy też styl
+            .select(`*, report_templates(fields, style, layout)`)
             .eq('id', id)
             .single();
 
