@@ -11,7 +11,7 @@ export class PdfService {
     private printer: any;
 
     constructor() {
-        // Definicja fontów z obsługą polskich znaków
+        // Definicja fontów z obsługą polskich znaków (ścieżki do plików .ttf)
         const fonts = {
             Roboto: {
                 normal: path.join(__dirname, '../../fonts/Roboto-Regular.ttf'),
@@ -33,18 +33,16 @@ export class PdfService {
 
         const fieldsMap = new Map(fieldsDefinition.map(f => [f.id, f]));
 
-        // --- Funkcja budująca układ strony ---
+        // --- Funkcja budująca układ strony (Grid) ---
         const buildLayout = (rows: any[]): Content[] => {
             if (!rows || !Array.isArray(rows)) return [];
 
             return rows.map((row) => {
-                const columns = row.columns.map((col: any) => {
-                    return {
-                        width: `${col.width}%`,
-                        stack: col.items.map((item: any) => renderItem(item)),
-                        margin: [5, 5, 5, 5]
-                    };
-                });
+                const columns = row.columns.map((col: any) => ({
+                    width: `${col.width}%`, // Dynamiczna szerokość kolumny
+                    stack: col.items.map((item: any) => renderItem(item)),
+                    margin: [5, 5, 5, 5]
+                }));
 
                 return {
                     columns: columns,
@@ -54,7 +52,7 @@ export class PdfService {
             });
         };
 
-        // --- Funkcja renderująca element ---
+        // --- Funkcja renderująca pojedynczy element ---
         const renderItem = (item: any): Content => {
             const style = item.style || {};
 
@@ -76,6 +74,11 @@ export class PdfService {
                 const value = answers[item.fieldId];
                 const label = fieldDef ? fieldDef.label : 'Nieznane pole';
 
+                // Debug: Sprawdzamy czy podpis wchodzi
+                if (fieldDef?.type === 'signature') {
+                    console.log(`[PdfService] Podpis ID: ${item.fieldId}, Typ wartości: ${typeof value}, Długość: ${value?.length || 0}`);
+                }
+
                 // A. Tabela
                 if (fieldDef?.type === 'table') {
                     const columns = fieldDef.columns || ['Kolumna 1'];
@@ -87,14 +90,16 @@ export class PdfService {
                             {
                                 table: {
                                     headerRows: 1,
-                                    widths: Array(columns.length).fill('*'),
+                                    widths: Array(columns.length).fill('*'), // Auto szerokość
                                     body: [
+                                        // Nagłówek tabeli
                                         columns.map((colName: string) => ({
                                             text: colName,
                                             bold: true,
                                             fillColor: '#f3f4f6',
                                             fontSize: 9
                                         })),
+                                        // Wiersze z danymi
                                         ...(rows.length > 0
                                                 ? rows.map((row: any) => columns.map((colName: string) => ({
                                                     text: row[colName] || '-',
@@ -111,50 +116,35 @@ export class PdfService {
                     };
                 }
 
-                // B. ✅ POPRAWIONA OBSŁUGA PODPISU (Obrazek Base64)
+                // B. Podpis (Obrazek)
                 if (fieldDef?.type === 'signature') {
-                    // Sprawdzamy czy wartość to obrazek (Base64)
                     if (typeof value === 'string' && value.startsWith('data:image')) {
                         return {
                             stack: [
                                 { text: label, fontSize: 9, color: '#666666', bold: true },
                                 {
-                                    image: value, // pdfmake wstawi tu obrazek
-                                    width: 150,   // Rozmiar podpisu
+                                    image: value,
+                                    width: 150,
                                     margin: [0, 5, 0, 0]
                                 }
                             ],
                             margin: [0, 5, 0, 10]
                         };
                     } else {
-                        // Fallback jeśli brak podpisu
                         return {
                             stack: [
                                 { text: label, fontSize: 9, color: '#666666', bold: true },
-                                {
-                                    text: 'Brak podpisu',
-                                    fontSize: 10,
-                                    color: '#999999',
-                                    italics: true,
-                                    margin: [0, 5, 0, 0]
-                                }
+                                { text: 'Brak podpisu', fontSize: 10, color: '#999999', italics: true, margin: [0, 5, 0, 0] }
                             ],
                             margin: [0, 5, 0, 10]
                         };
                     }
                 }
 
-                // C. Pozostałe pola (Tekst, Checkbox, itp.)
+                // C. Pozostałe pola
                 let displayValue = value ? value.toString() : '-';
-
-                if (fieldDef?.type === 'checkbox') {
-                    displayValue = value ? 'TAK' : 'NIE';
-                }
-                // Jeśli chcesz wyświetlać zdjęcie z pola "photo", też możesz tu użyć logiki 'image'
-                // Na razie zostawiamy jako tekst nazwy pliku
-                if (fieldDef?.type === 'photo') {
-                    displayValue = value ? `[Załączone zdjęcie: ${value}]` : 'Brak zdjęcia';
-                }
+                if (fieldDef?.type === 'checkbox') displayValue = value ? 'TAK' : 'NIE';
+                if (fieldDef?.type === 'photo') displayValue = value ? `[Załączone zdjęcie: ${value}]` : 'Brak zdjęcia';
 
                 return {
                     stack: [
@@ -174,10 +164,9 @@ export class PdfService {
             return { text: '' };
         };
 
-        // --- Definicja Dokumentu ---
+        // --- Definicja Całego Dokumentu ---
         const docDefinition: TDocumentDefinitions = {
             content: [
-                // Nagłówek
                 {
                     text: globalStyle.headerText || template.name.toUpperCase(),
                     style: 'header',
@@ -185,27 +174,23 @@ export class PdfService {
                     color: globalStyle.primaryColor,
                     margin: [0, 0, 0, 20],
                 },
-                // Tytuł
                 {
                     text: report.title,
                     style: 'title',
                     margin: [0, 0, 0, 5],
                 },
-                // Metadane
                 {
                     text: `Data: ${new Date(report.created_at).toLocaleDateString('pl-PL')} | Autor: ${report.users?.first_name || ''} ${report.users?.last_name || ''}`,
                     style: 'subtitle',
                     color: '#666666',
                     margin: [0, 0, 0, 20],
                 },
-                // Linia
                 { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 2, lineColor: globalStyle.primaryColor }] },
                 { text: '', margin: [0, 0, 0, 20] },
 
-                // Layout
+                // Wstawiamy wygenerowany layout
                 ...buildLayout(layout),
 
-                // Stopka
                 { text: '', margin: [0, 30, 0, 0] },
                 { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 1, lineColor: '#cccccc' }] },
                 {
