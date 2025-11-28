@@ -12,7 +12,6 @@ export class PdfService {
 
     constructor() {
         // Definicja fontów z obsługą polskich znaków
-        // Upewnij się, że pliki .ttf znajdują się w folderze backend/fonts/
         const fonts = {
             Roboto: {
                 normal: path.join(__dirname, '../../fonts/Roboto-Regular.ttf'),
@@ -26,22 +25,19 @@ export class PdfService {
 
     async generateReportPdf(report: any): Promise<Buffer> {
         const template = report.report_templates;
-        // Pobieramy style globalne lub ustawiamy domyślne
         const globalStyle = template.style || { primaryColor: '#000000', headerText: 'RAPORT' };
 
-        const layout = template.layout as any[];         // Struktura wierszy/kolumn z Buildera
-        const fieldsDefinition = template.fields as any[]; // Definicje pól (typy, etykiety)
-        const answers = report.answers || {};            // Odpowiedzi użytkownika
+        const layout = template.layout as any[];
+        const fieldsDefinition = template.fields as any[];
+        const answers = report.answers || {};
 
-        // Mapa pomocnicza do szybkiego wyszukiwania definicji pola po ID
         const fieldsMap = new Map(fieldsDefinition.map(f => [f.id, f]));
 
-        // --- Funkcja rekurencyjna budująca układ strony (Grid) ---
+        // --- Funkcja budująca układ strony ---
         const buildLayout = (rows: any[]): Content[] => {
             if (!rows || !Array.isArray(rows)) return [];
 
             return rows.map((row) => {
-                // Mapujemy kolumny z naszej struktury na strukturę pdfmake
                 const columns = row.columns.map((col: any) => {
                     return {
                         width: `${col.width}%`,
@@ -58,11 +54,11 @@ export class PdfService {
             });
         };
 
-        // --- Główna funkcja renderująca pojedynczy element (Pole lub Tekst) ---
+        // --- Funkcja renderująca element ---
         const renderItem = (item: any): Content => {
             const style = item.style || {};
 
-            // 1. Tekst statyczny (dodany w Layout Builderze)
+            // 1. Tekst statyczny
             if (item.type === 'text') {
                 return {
                     text: item.content || '',
@@ -74,13 +70,13 @@ export class PdfService {
                 };
             }
 
-            // 2. Pole dynamiczne (wypełnione przez użytkownika)
+            // 2. Pole dynamiczne
             if (item.type === 'field' && item.fieldId) {
                 const fieldDef = fieldsMap.get(item.fieldId);
                 const value = answers[item.fieldId];
                 const label = fieldDef ? fieldDef.label : 'Nieznane pole';
 
-                // A. Obsługa Tabeli
+                // A. Tabela
                 if (fieldDef?.type === 'table') {
                     const columns = fieldDef.columns || ['Kolumna 1'];
                     const rows = Array.isArray(value) ? value : [];
@@ -91,16 +87,14 @@ export class PdfService {
                             {
                                 table: {
                                     headerRows: 1,
-                                    widths: Array(columns.length).fill('*'), // Auto szerokość
+                                    widths: Array(columns.length).fill('*'),
                                     body: [
-                                        // Nagłówek tabeli
                                         columns.map((colName: string) => ({
                                             text: colName,
                                             bold: true,
                                             fillColor: '#f3f4f6',
                                             fontSize: 9
                                         })),
-                                        // Wiersze z danymi
                                         ...(rows.length > 0
                                                 ? rows.map((row: any) => columns.map((colName: string) => ({
                                                     text: row[colName] || '-',
@@ -117,32 +111,49 @@ export class PdfService {
                     };
                 }
 
-                // B. Obsługa Podpisu (Obrazek Base64)
-                if (fieldDef?.type === 'signature' && typeof value === 'string' && value.startsWith('data:image')) {
-                    return {
-                        stack: [
-                            { text: label, fontSize: 9, color: '#666666', bold: true },
-                            {
-                                image: value, // pdfmake natywnie obsługuje dataURL
-                                width: 150,   // Szerokość podpisu
-                                margin: [0, 5, 0, 0]
-                            }
-                        ],
-                        margin: [0, 5, 0, 10]
-                    };
+                // B. ✅ POPRAWIONA OBSŁUGA PODPISU (Obrazek Base64)
+                if (fieldDef?.type === 'signature') {
+                    // Sprawdzamy czy wartość to obrazek (Base64)
+                    if (typeof value === 'string' && value.startsWith('data:image')) {
+                        return {
+                            stack: [
+                                { text: label, fontSize: 9, color: '#666666', bold: true },
+                                {
+                                    image: value, // pdfmake wstawi tu obrazek
+                                    width: 150,   // Rozmiar podpisu
+                                    margin: [0, 5, 0, 0]
+                                }
+                            ],
+                            margin: [0, 5, 0, 10]
+                        };
+                    } else {
+                        // Fallback jeśli brak podpisu
+                        return {
+                            stack: [
+                                { text: label, fontSize: 9, color: '#666666', bold: true },
+                                {
+                                    text: 'Brak podpisu',
+                                    fontSize: 10,
+                                    color: '#999999',
+                                    italics: true,
+                                    margin: [0, 5, 0, 0]
+                                }
+                            ],
+                            margin: [0, 5, 0, 10]
+                        };
+                    }
                 }
 
-                // C. Obsługa pozostałych pól (Tekst, Liczba, Checkbox)
+                // C. Pozostałe pola (Tekst, Checkbox, itp.)
                 let displayValue = value ? value.toString() : '-';
 
                 if (fieldDef?.type === 'checkbox') {
                     displayValue = value ? 'TAK' : 'NIE';
                 }
+                // Jeśli chcesz wyświetlać zdjęcie z pola "photo", też możesz tu użyć logiki 'image'
+                // Na razie zostawiamy jako tekst nazwy pliku
                 if (fieldDef?.type === 'photo') {
                     displayValue = value ? `[Załączone zdjęcie: ${value}]` : 'Brak zdjęcia';
-                }
-                if (fieldDef?.type === 'signature' && !value) {
-                    displayValue = 'Brak podpisu';
                 }
 
                 return {
@@ -166,7 +177,7 @@ export class PdfService {
         // --- Definicja Dokumentu ---
         const docDefinition: TDocumentDefinitions = {
             content: [
-                // 1. Nagłówek strony
+                // Nagłówek
                 {
                     text: globalStyle.headerText || template.name.toUpperCase(),
                     style: 'header',
@@ -174,26 +185,27 @@ export class PdfService {
                     color: globalStyle.primaryColor,
                     margin: [0, 0, 0, 20],
                 },
-                // 2. Tytuł raportu i Metadane
+                // Tytuł
                 {
                     text: report.title,
                     style: 'title',
                     margin: [0, 0, 0, 5],
                 },
+                // Metadane
                 {
                     text: `Data: ${new Date(report.created_at).toLocaleDateString('pl-PL')} | Autor: ${report.users?.first_name || ''} ${report.users?.last_name || ''}`,
                     style: 'subtitle',
                     color: '#666666',
                     margin: [0, 0, 0, 20],
                 },
-                // Linia oddzielająca
+                // Linia
                 { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 2, lineColor: globalStyle.primaryColor }] },
                 { text: '', margin: [0, 0, 0, 20] },
 
-                // 3. Dynamiczna zawartość (Layout z Buildera)
+                // Layout
                 ...buildLayout(layout),
 
-                // 4. Stopka strony
+                // Stopka
                 { text: '', margin: [0, 30, 0, 0] },
                 { canvas: [{ type: 'line', x1: 0, y1: 5, x2: 515, y2: 5, lineWidth: 1, lineColor: '#cccccc' }] },
                 {
@@ -215,7 +227,7 @@ export class PdfService {
                 footer: { fontSize: 9 },
             },
             defaultStyle: {
-                font: 'Roboto', // Kluczowe dla polskich znaków
+                font: 'Roboto',
             },
         };
 
