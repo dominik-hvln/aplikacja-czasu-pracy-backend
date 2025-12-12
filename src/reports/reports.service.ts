@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateReportDto } from './dto/create-report.dto';
 import { PdfService } from './pdf.service';
@@ -10,7 +10,7 @@ export class ReportsService {
         private readonly supabaseService: SupabaseService,
         private readonly pdfService: PdfService,
         private readonly config: ConfigService,
-    ) {}
+    ) { }
 
     // Metoda pomocnicza do wysyłki maila (Resend przez fetch)
     private async sendEmailWithAttachment(to: string, subject: string, text: string, pdfBuffer: Buffer, filename: string) {
@@ -97,7 +97,7 @@ export class ReportsService {
             `Raport z wykonania zlecenia: ${report.title}`,
             `Dzień dobry,\n\nW załączniku przesyłamy raport z wykonanych prac.\n\nPozdrawiamy,\nZespół`,
             pdfBuffer,
-            `Raport_${report.id.slice(0,8)}.pdf`
+            `Raport_${report.id.slice(0, 8)}.pdf`
         );
     }
 
@@ -127,5 +127,14 @@ export class ReportsService {
 
         if (error) throw new InternalServerErrorException(error.message);
         return data;
+    }
+    async generatePdf(id: string) {
+        const report = await this.findOne(id);
+        if (!report) throw new NotFoundException('Raport nie istnieje');
+
+        const pdfBuffer = await this.pdfService.generateReportPdf(report);
+        const filename = `Raport_${report.id.slice(0, 8)}.pdf`;
+
+        return { buffer: pdfBuffer, filename };
     }
 }
