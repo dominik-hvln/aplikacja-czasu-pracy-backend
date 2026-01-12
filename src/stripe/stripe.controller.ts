@@ -1,7 +1,7 @@
 import { Controller, Post, Headers, Req, BadRequestException, Body, UseGuards } from '@nestjs/common';
 import { StripeService } from './stripe.service';
 import { SupabaseService } from '../supabase/supabase.service';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 
 @Controller('stripe')

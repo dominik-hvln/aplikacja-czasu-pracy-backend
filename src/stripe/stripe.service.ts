@@ -134,7 +134,8 @@ export class StripeService {
     }
 
     private async handleInvoicePaymentSucceeded(invoice: Stripe.Invoice, supabase: any) {
-        const subscriptionId = invoice.subscription as string;
+        // subscription can be string or object. Cast to any to be safe or check type.
+        const subscriptionId = (invoice.subscription as unknown) as string;
         const stripeSub = await this.stripe.subscriptions.retrieve(subscriptionId);
 
         await supabase
