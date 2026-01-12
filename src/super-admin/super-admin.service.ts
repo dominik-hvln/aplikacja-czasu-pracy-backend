@@ -258,7 +258,7 @@ export class SuperAdminService {
             // Monthly
             if (
                 (dto.price_monthly !== undefined && dto.price_monthly !== existingPlan.price_monthly) ||
-                (!existingPlan.stripe_price_id_monthly && (dto.price_monthly > 0 || existingPlan.price_monthly > 0))
+                (!existingPlan.stripe_price_id_monthly && ((dto.price_monthly ?? 0) > 0 || existingPlan.price_monthly > 0))
             ) {
                 const amount = dto.price_monthly ?? existingPlan.price_monthly;
                 if (amount > 0) {
@@ -270,7 +270,7 @@ export class SuperAdminService {
             // Yearly
             if (
                 (dto.price_yearly !== undefined && dto.price_yearly !== existingPlan.price_yearly) ||
-                (!existingPlan.stripe_price_id_yearly && (dto.price_yearly > 0 || existingPlan.price_yearly > 0))
+                (!existingPlan.stripe_price_id_yearly && ((dto.price_yearly ?? 0) > 0 || existingPlan.price_yearly > 0))
             ) {
                 const amount = dto.price_yearly ?? existingPlan.price_yearly;
                 if (amount > 0) {
