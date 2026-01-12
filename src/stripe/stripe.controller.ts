@@ -1,6 +1,7 @@
-import { Controller, Post, Headers, Req, BadRequestException, Body, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Headers, Req, BadRequestException, Body, UseGuards } from '@nestjs/common';
 import { StripeService } from './stripe.service';
 import { SupabaseService } from '../supabase/supabase.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 import type { Request } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 
@@ -8,8 +9,30 @@ import { AuthGuard } from '@nestjs/passport';
 export class StripeController {
     constructor(
         private readonly stripeService: StripeService,
-        private readonly supabaseService: SupabaseService
+        private readonly supabaseService: SupabaseService,
+        private readonly subscriptionService: SubscriptionService
     ) { }
+
+    @Get('plans')
+    async getPlans() {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('plans')
+            .select('*')
+            .eq('is_active', true)
+            .order('price_monthly', { ascending: true });
+
+        if (error) throw new BadRequestException(error.message);
+        return data;
+    }
+
+    @Get('subscription')
+    @UseGuards(AuthGuard('jwt'))
+    async getSubscription(@Req() req: any) {
+        const user = req.user;
+        // Use SubscriptionService to get status
+        return this.subscriptionService.getStatus(user.company_id);
+    }
 
     @Post('webhook')
     async handleWebhook(@Headers('stripe-signature') signature: string, @Req() req: Request) {
@@ -28,6 +51,22 @@ export class StripeController {
             console.error(`Webhook Error: ${err.message}`);
             throw new BadRequestException(`Webhook Error: ${err.message}`);
         }
+    }
+
+    @Post('portal')
+    @UseGuards(AuthGuard('jwt'))
+    async createPortalSession(@Req() req: any, @Body() body: { returnUrl: string }) {
+        const user = req.user;
+        const supabase = this.supabaseService.getAdminClient();
+
+        // Fetch company Stripe ID
+        const { data: company } = await supabase.from('companies').select('stripe_customer_id').eq('id', user.company_id).single();
+
+        if (!company?.stripe_customer_id) {
+            throw new BadRequestException('Company does not have a Stripe Customer ID');
+        }
+
+        return this.stripeService.createBillingPortalSession(company.stripe_customer_id, body.returnUrl);
     }
 
     @Post('checkout')

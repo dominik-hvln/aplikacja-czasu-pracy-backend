@@ -1,13 +1,25 @@
-import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 
 @Injectable()
 export class ProjectsService {
-    constructor(private readonly supabaseService: SupabaseService) {}
+    constructor(
+        private readonly supabaseService: SupabaseService,
+        private readonly subscriptionService: SubscriptionService
+    ) { }
 
     async create(createProjectDto: CreateProjectDto, companyId: string) {
+        // Check Limits
+        const projectsCount = await this.countForCompany(companyId);
+        const canCreate = await this.subscriptionService.checkLimits(companyId, 'max_projects', projectsCount);
+
+        if (!canCreate) {
+            throw new ForbiddenException('Osiągnięto limit projektów dla Twojego planu.');
+        }
+
         const supabase = this.supabaseService.getClient();
 
         const { data, error } = await supabase
@@ -20,6 +32,17 @@ export class ProjectsService {
             throw new InternalServerErrorException(error.message);
         }
         return data;
+    }
+
+    async countForCompany(companyId: string): Promise<number> {
+        const supabase = this.supabaseService.getClient();
+        const { count, error } = await supabase
+            .from('projects')
+            .select('*', { count: 'exact', head: true })
+            .eq('company_id', companyId);
+
+        if (error) return 0;
+        return count || 0;
     }
 
     async findAllForCompany(companyId: string) {

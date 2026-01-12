@@ -5,11 +5,14 @@ import { UpdateProjectDto } from './dto/update-project.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles, Role } from '../auth/roles.decorator';
+import { ModuleGuard } from '../auth/module.guard';
+import { RequiredModules } from '../auth/modules.decorator';
 
 @Controller('projects')
-@UseGuards(AuthGuard('jwt'), RolesGuard)
+@UseGuards(AuthGuard('jwt'), RolesGuard, ModuleGuard)
+@RequiredModules('projects')
 export class ProjectsController {
-    constructor(private readonly projectsService: ProjectsService) {}
+    constructor(private readonly projectsService: ProjectsService) { }
 
     @Post()
     @Roles(Role.Admin, Role.Manager)

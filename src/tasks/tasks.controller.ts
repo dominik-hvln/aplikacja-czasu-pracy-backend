@@ -4,9 +4,12 @@ import { CreateTaskDto } from './dto/create-task.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles, Role } from '../auth/roles.decorator';
+import { ModuleGuard } from '../auth/module.guard';
+import { RequiredModules } from '../auth/modules.decorator';
 
 @Controller('tasks')
-@UseGuards(AuthGuard('jwt'), RolesGuard)
+@UseGuards(AuthGuard('jwt'), RolesGuard, ModuleGuard)
+@RequiredModules('tasks')
 export class TasksController {
     constructor(private readonly tasksService: TasksService) { }
 

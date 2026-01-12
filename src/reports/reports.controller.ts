@@ -4,9 +4,13 @@ import { ReportsService } from './reports.service';
 import { CreateReportDto } from './dto/create-report.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../auth/roles.guard';
+import { ModuleGuard } from '../auth/module.guard';
+
+import { RequiredModules } from '../auth/modules.decorator';
 
 @Controller('reports')
-@UseGuards(AuthGuard('jwt'), RolesGuard)
+@UseGuards(AuthGuard('jwt'), RolesGuard, ModuleGuard)
+@RequiredModules('reports')
 export class ReportsController {
     constructor(private readonly reportsService: ReportsService) { }
 

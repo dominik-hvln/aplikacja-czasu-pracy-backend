@@ -4,12 +4,15 @@ import { CreateLocationQrCodeDto } from './dto/create-location-qr-code.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles, Role } from '../auth/roles.decorator';
+import { ModuleGuard } from '../auth/module.guard';
+import { RequiredModules } from '../auth/modules.decorator';
 
 @Controller('location-qr-codes')
-@UseGuards(AuthGuard('jwt'), RolesGuard)
+@UseGuards(AuthGuard('jwt'), RolesGuard, ModuleGuard)
 @Roles(Role.Admin, Role.Manager)
+@RequiredModules('geolocation')
 export class LocationQrCodesController {
-    constructor(private readonly locationQrCodesService: LocationQrCodesService) {}
+    constructor(private readonly locationQrCodesService: LocationQrCodesService) { }
 
     @Post()
     create(@Body() createDto: CreateLocationQrCodeDto, @Req() req) {
