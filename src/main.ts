@@ -5,15 +5,18 @@ import { ValidationPipe } from '@nestjs/common';
 import { json, urlencoded } from 'express';
 
 async function bootstrap() {
-    const app = await NestFactory.create(AppModule, { bufferLogs: true });
+    // Disable default body parser to handle raw body manually
+    const app = await NestFactory.create(AppModule, { bodyParser: false, bufferLogs: true });
 
-    // Enable raw body for Stripe Webhooks
-    app.use('/stripe/webhook', json({ verify: (req: any, res, buf) => { req.rawBody = buf; } }));
+    // Enable raw body for Stripe Webhooks (and global JSON parsing)
+    app.use(json({ verify: (req: any, res, buf) => { req.rawBody = buf; } }));
+    app.use(urlencoded({ extended: true }));
 
     app.useGlobalPipes(
         new ValidationPipe({
             whitelist: true,
             skipMissingProperties: false,
+            transform: true, // Auto-transform types
         })
     );
 

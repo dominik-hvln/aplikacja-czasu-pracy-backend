@@ -234,23 +234,52 @@ export class SuperAdminService {
 
         const updates: any = { ...dto };
 
-        // Handle Stripe Sync
-        if (existingPlan.stripe_product_id) {
-            if (dto.name && dto.name !== existingPlan.name) {
-                await this.stripeService.updateProduct(existingPlan.stripe_product_id, dto.name);
+        // --- STRIPE SYNC ---
+        // Ensure Stripe Product exists
+        let stripeProductId = existingPlan.stripe_product_id;
+
+        if (!stripeProductId) {
+            // If plan doesn't have a Stripe Product (e.g. legacy 'basic'), create one now
+            try {
+                const product = await this.stripeService.createProduct(updates.name || existingPlan.name);
+                stripeProductId = product.id;
+                updates.stripe_product_id = stripeProductId;
+                console.log(`Created missing Stripe Product for plan ${id}: ${stripeProductId}`);
+            } catch (e) {
+                console.error('Failed to create missing Stripe Product', e);
+            }
+        } else if (dto.name && dto.name !== existingPlan.name) {
+            // Update name if changed
+            await this.stripeService.updateProduct(stripeProductId, dto.name);
+        }
+
+        // Ensure Prices (Create new price if amount changed OR if price ID is missing)
+        if (stripeProductId) {
+            // Monthly
+            if (
+                (dto.price_monthly !== undefined && dto.price_monthly !== existingPlan.price_monthly) ||
+                (!existingPlan.stripe_price_id_monthly && (dto.price_monthly > 0 || existingPlan.price_monthly > 0))
+            ) {
+                const amount = dto.price_monthly ?? existingPlan.price_monthly;
+                if (amount > 0) {
+                    const price = await this.stripeService.createPrice(stripeProductId, amount, 'month');
+                    updates.stripe_price_id_monthly = price.id;
+                }
             }
 
-            // If price changes, create NEW price in Stripe (Stripe prices are immutable)
-            if (dto.price_monthly !== undefined && dto.price_monthly !== existingPlan.price_monthly) {
-                const price = await this.stripeService.createPrice(existingPlan.stripe_product_id, dto.price_monthly, 'month');
-                updates.stripe_price_id_monthly = price.id;
-            }
-
-            if (dto.price_yearly !== undefined && dto.price_yearly !== existingPlan.price_yearly) {
-                const price = await this.stripeService.createPrice(existingPlan.stripe_product_id, dto.price_yearly, 'year');
-                updates.stripe_price_id_yearly = price.id;
+            // Yearly
+            if (
+                (dto.price_yearly !== undefined && dto.price_yearly !== existingPlan.price_yearly) ||
+                (!existingPlan.stripe_price_id_yearly && (dto.price_yearly > 0 || existingPlan.price_yearly > 0))
+            ) {
+                const amount = dto.price_yearly ?? existingPlan.price_yearly;
+                if (amount > 0) {
+                    const price = await this.stripeService.createPrice(stripeProductId, amount, 'year');
+                    updates.stripe_price_id_yearly = price.id;
+                }
             }
         }
+        // -------------------
 
         const { data, error } = await supabase
             .from('plans')
