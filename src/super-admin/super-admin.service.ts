@@ -3,10 +3,16 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { CreateSystemUserDto } from './dto/create-user.dto';
 import { CreatePlanDto } from './dto/create-plan.dto';
+import { CreateModuleDto } from './dto/create-module.dto';
+
+import { StripeService } from '../stripe/stripe.service';
 
 @Injectable()
 export class SuperAdminService {
-    constructor(private readonly supabaseService: SupabaseService) { }
+    constructor(
+        private readonly supabaseService: SupabaseService,
+        private readonly stripeService: StripeService
+    ) { }
 
     async getAllCompanies() {
         const supabase = this.supabaseService.getClient();
@@ -172,6 +178,33 @@ export class SuperAdminService {
 
     async createPlan(dto: CreatePlanDto) {
         const supabase = this.supabaseService.getClient();
+
+        // 1. Create or Get Stripe Product
+        let stripeProductId: string | null = null;
+        let stripePriceIdMonthly: string | null = null;
+        let stripePriceIdYearly: string | null = null;
+
+        try {
+            const product = await this.stripeService.createProduct(dto.name);
+            stripeProductId = product.id;
+
+            // 2. Create Prices
+            if (dto.price_monthly > 0) {
+                const priceMonthly = await this.stripeService.createPrice(stripeProductId, dto.price_monthly, 'month');
+                stripePriceIdMonthly = priceMonthly.id;
+            }
+
+            if (dto.price_yearly > 0) {
+                const priceYearly = await this.stripeService.createPrice(stripeProductId, dto.price_yearly, 'year');
+                stripePriceIdYearly = priceYearly.id;
+            }
+
+        } catch (err) {
+            console.error('Stripe Sync Error during Plan Create:', err);
+            // Optionally throw or proceed (if we want to allow manual sync later, but for now better to fail if automation is key)
+            throw new InternalServerErrorException('Failed to sync plan with Stripe');
+        }
+
         const { data, error } = await supabase
             .from('plans')
             .insert({
@@ -180,13 +213,73 @@ export class SuperAdminService {
                 price_monthly: dto.price_monthly,
                 price_yearly: dto.price_yearly,
                 limits: dto.limits || {},
-                is_active: dto.is_active ?? true
+                is_active: dto.is_active ?? true,
+                stripe_product_id: stripeProductId,
+                stripe_price_id_monthly: stripePriceIdMonthly,
+                stripe_price_id_yearly: stripePriceIdYearly
             })
             .select()
             .single();
 
         if (error) throw new InternalServerErrorException(error.message);
         return data;
+    }
+
+    async updatePlan(id: string, dto: Partial<CreatePlanDto>) {
+        const supabase = this.supabaseService.getClient();
+
+        // Fetch existing plan
+        const { data: existingPlan } = await supabase.from('plans').select('*').eq('id', id).single();
+        if (!existingPlan) throw new BadRequestException('Plan not found');
+
+        const updates: any = { ...dto };
+
+        // Handle Stripe Sync
+        if (existingPlan.stripe_product_id) {
+            if (dto.name && dto.name !== existingPlan.name) {
+                await this.stripeService.updateProduct(existingPlan.stripe_product_id, dto.name);
+            }
+
+            // If price changes, create NEW price in Stripe (Stripe prices are immutable)
+            if (dto.price_monthly !== undefined && dto.price_monthly !== existingPlan.price_monthly) {
+                const price = await this.stripeService.createPrice(existingPlan.stripe_product_id, dto.price_monthly, 'month');
+                updates.stripe_price_id_monthly = price.id;
+            }
+
+            if (dto.price_yearly !== undefined && dto.price_yearly !== existingPlan.price_yearly) {
+                const price = await this.stripeService.createPrice(existingPlan.stripe_product_id, dto.price_yearly, 'year');
+                updates.stripe_price_id_yearly = price.id;
+            }
+        }
+
+        const { data, error } = await supabase
+            .from('plans')
+            .update(updates)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
+
+    async deletePlan(id: string) { // Soft delete + Archive in Stripe
+        const supabase = this.supabaseService.getClient();
+
+        const { data: plan } = await supabase.from('plans').select('stripe_product_id').eq('id', id).single();
+
+        if (plan?.stripe_product_id) {
+            await this.stripeService.archiveProduct(plan.stripe_product_id);
+        }
+
+        // Soft delete
+        const { error } = await supabase
+            .from('plans')
+            .update({ is_active: false })
+            .eq('id', id);
+
+        if (error) throw new InternalServerErrorException(error.message);
+        return { message: 'Plan deactivated and archived in Stripe' };
     }
 
     // --- MODULES ---
@@ -199,6 +292,27 @@ export class SuperAdminService {
 
         if (error) throw new InternalServerErrorException(error.message);
         return data;
+    }
+
+    async createModule(dto: CreateModuleDto) { // using any or import generic DTO, ideally CreateModuleDto
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase.from('modules').insert(dto).select().single();
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
+
+    async updateModule(code: string, dto: Partial<CreateModuleDto>) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase.from('modules').update(dto).eq('code', code).select().single();
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
+
+    async deleteModule(code: string) {
+        const supabase = this.supabaseService.getClient();
+        const { error } = await supabase.from('modules').delete().eq('code', code);
+        if (error) throw new InternalServerErrorException(error.message);
+        return { message: 'Module deleted' };
     }
 
     // --- SUBSCRIPTION MANAGEMENT ---

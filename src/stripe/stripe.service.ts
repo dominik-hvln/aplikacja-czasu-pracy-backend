@@ -20,6 +20,49 @@ export class StripeService {
         return this.stripe;
     }
 
+    // --- PRODUCTS & PRICES ---
+
+    async createProduct(name: string) {
+        try {
+            return await this.stripe.products.create({ name });
+        } catch (error) {
+            console.error('Stripe createProduct error:', error);
+            throw new InternalServerErrorException('Failed to create Stripe product');
+        }
+    }
+
+    async updateProduct(productId: string, name: string) {
+        try {
+            return await this.stripe.products.update(productId, { name });
+        } catch (error) {
+            console.error('Stripe updateProduct error:', error);
+            throw new InternalServerErrorException('Failed to update Stripe product');
+        }
+    }
+
+    async archiveProduct(productId: string) {
+        try {
+            return await this.stripe.products.update(productId, { active: false });
+        } catch (error) {
+            console.error('Stripe archiveProduct error:', error);
+            throw new InternalServerErrorException('Failed to archive Stripe product');
+        }
+    }
+
+    async createPrice(productId: string, amount: number, interval: 'month' | 'year', currency = 'pln') {
+        try {
+            return await this.stripe.prices.create({
+                product: productId,
+                unit_amount: Math.round(amount * 100), // Stripe expects cents
+                currency,
+                recurring: { interval },
+            });
+        } catch (error) {
+            console.error('Stripe createPrice error:', error);
+            throw new InternalServerErrorException('Failed to create Stripe price');
+        }
+    }
+
     async createCustomer(email: string, name: string) {
         try {
             const customer = await this.stripe.customers.create({
