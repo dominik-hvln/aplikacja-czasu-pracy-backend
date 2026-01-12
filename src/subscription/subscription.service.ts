@@ -56,6 +56,27 @@ export class SubscriptionService {
         return data;
     }
 
+    /**
+     * Checks if a specific module is enabled for a company.
+     * Logic: Check `company_modules` table.
+     */
+    async isModuleEnabled(companyId: string, moduleCode: string): Promise<boolean> {
+        if (!companyId) return false;
+
+        const { data, error } = await this.supabase
+            .from('company_modules')
+            .select('module_code')
+            .eq('company_id', companyId)
+            .eq('module_code', moduleCode)
+            .maybeSingle();
+
+        if (error || !data) {
+            return false;
+        }
+
+        return true;
+    }
+
     async checkLimits(companyId: string, limitKey: string, currentUsage: number): Promise<boolean> {
         const { status, plans: plan } = await this.getStatus(companyId);
 
