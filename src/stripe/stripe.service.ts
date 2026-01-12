@@ -125,8 +125,8 @@ export class StripeService {
                 company_id: companyId,
                 stripe_subscription_id: subscriptionId,
                 status: stripeSub.status,
-                current_period_start: new Date(stripeSub.current_period_start * 1000).toISOString(),
-                current_period_end: new Date(stripeSub.current_period_end * 1000).toISOString(),
+                current_period_start: new Date((stripeSub as any).current_period_start * 1000).toISOString(),
+                current_period_end: new Date((stripeSub as any).current_period_end * 1000).toISOString(),
                 plan_id: metadata.planId
             }, { onConflict: 'company_id' });
 
@@ -135,15 +135,15 @@ export class StripeService {
 
     private async handleInvoicePaymentSucceeded(invoice: Stripe.Invoice, supabase: any) {
         // subscription can be string or object. Cast to any to be safe or check type.
-        const subscriptionId = (invoice.subscription as unknown) as string;
+        const subscriptionId = (invoice as any).subscription as string;
         const stripeSub = await this.stripe.subscriptions.retrieve(subscriptionId);
 
         await supabase
             .from('subscriptions')
             .update({
                 status: stripeSub.status,
-                current_period_start: new Date(stripeSub.current_period_start * 1000).toISOString(),
-                current_period_end: new Date(stripeSub.current_period_end * 1000).toISOString(),
+                current_period_start: new Date((stripeSub as any).current_period_start * 1000).toISOString(),
+                current_period_end: new Date((stripeSub as any).current_period_end * 1000).toISOString(),
             })
             .eq('stripe_subscription_id', subscriptionId);
 
