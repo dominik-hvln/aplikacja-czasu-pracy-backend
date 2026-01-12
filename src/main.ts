@@ -7,6 +7,9 @@ import { json, urlencoded } from 'express';
 async function bootstrap() {
     const app = await NestFactory.create(AppModule, { bufferLogs: true });
 
+    // Enable raw body for Stripe Webhooks
+    app.use('/stripe/webhook', json({ verify: (req: any, res, buf) => { req.rawBody = buf; } }));
+
     app.useGlobalPipes(
         new ValidationPipe({
             whitelist: true,

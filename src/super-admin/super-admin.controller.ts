@@ -14,6 +14,12 @@ import { ToggleModuleDto } from './dto/toggle-module.dto';
 export class SuperAdminController {
     constructor(private readonly superAdminService: SuperAdminService) { }
 
+    @Get('stats')
+    @Roles(Role.SuperAdmin)
+    getStats() {
+        return this.superAdminService.getStats();
+    }
+
     @Get('companies')
     @Roles(Role.SuperAdmin)
     getAllCompanies() {

@@ -6,6 +6,9 @@ create table public.plans (
   limits jsonb default '{}'::jsonb,
   price_monthly numeric(10, 2),
   price_yearly numeric(10, 2),
+  stripe_product_id text,
+  stripe_price_id_monthly text,
+  stripe_price_id_yearly text,
   is_active boolean default true,
   created_at timestamptz default now()
 );
@@ -43,6 +46,10 @@ create table public.company_modules (
   module_code text references public.modules(code) on delete cascade,
   primary key (company_id, module_code)
 );
+
+-- 6. Add Stripe Customer ID to Companies
+alter table public.companies add column if not exists stripe_customer_id text;
+alter table public.subscriptions add column if not exists stripe_subscription_id text;
 
 -- Insert default modules
 insert into public.modules (code, name, description) values

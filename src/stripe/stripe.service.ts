@@ -1,0 +1,160 @@
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import Stripe from 'stripe';
+
+@Injectable()
+export class StripeService {
+    private stripe: Stripe;
+
+    constructor(private readonly configService: ConfigService) {
+        const apiKey = this.configService.get<string>('STRIPE_SECRET_KEY');
+        if (!apiKey) {
+            throw new Error('STRIPE_SECRET_KEY not defined');
+        }
+        this.stripe = new Stripe(apiKey, {
+            apiVersion: '2025-12-15.clover',
+        });
+    }
+
+    public getClient(): Stripe {
+        return this.stripe;
+    }
+
+    async createCustomer(email: string, name: string) {
+        try {
+            const customer = await this.stripe.customers.create({
+                email,
+                name,
+            });
+            return customer;
+        } catch (error) {
+            console.error('Stripe createCustomer error:', error);
+            throw new InternalServerErrorException('Failed to create Stripe customer');
+        }
+    }
+
+    async createCheckoutSession(customerId: string, priceId: string, successUrl: string, cancelUrl: string, metadata: any = {}) {
+        try {
+            const session = await this.stripe.checkout.sessions.create({
+                customer: customerId,
+                line_items: [
+                    {
+                        price: priceId,
+                        quantity: 1,
+                    },
+                ],
+                mode: 'subscription',
+                success_url: successUrl,
+                cancel_url: cancelUrl,
+                metadata: metadata
+            });
+            return { url: session.url };
+        } catch (error) {
+            console.error('Stripe createCheckoutSession error:', error);
+            throw new InternalServerErrorException('Failed to create checkout session');
+        }
+    }
+
+    async createBillingPortalSession(customerId: string, returnUrl: string) {
+        try {
+            const session = await this.stripe.billingPortal.sessions.create({
+                customer: customerId,
+                return_url: returnUrl,
+            });
+            return { url: session.url };
+        } catch (error) {
+            console.error('Stripe createBillingPortalSession error:', error);
+            throw new InternalServerErrorException('Failed to create billing portal session');
+        }
+    }
+
+    async constructEventFromPayload(signature: string, payload: Buffer) {
+        const webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET');
+        if (!webhookSecret) {
+            throw new Error('STRIPE_WEBHOOK_SECRET not defined');
+        }
+        return this.stripe.webhooks.constructEvent(payload, signature, webhookSecret);
+    }
+
+    async handleWebhookEvent(event: Stripe.Event, supabase: any) {
+        switch (event.type) {
+            case 'checkout.session.completed': {
+                const session = event.data.object as Stripe.Checkout.Session;
+                await this.handleCheckoutSessionCompleted(session, supabase);
+                break;
+            }
+            case 'invoice.payment_succeeded': {
+                const invoice = event.data.object as Stripe.Invoice;
+                await this.handleInvoicePaymentSucceeded(invoice, supabase);
+                break;
+            }
+            case 'customer.subscription.deleted': {
+                const subscription = event.data.object as Stripe.Subscription;
+                await this.handleSubscriptionDeleted(subscription, supabase);
+                break;
+            }
+            default:
+                console.log(`Unhandled event type ${event.type}`);
+        }
+    }
+
+    private async handleCheckoutSessionCompleted(session: Stripe.Checkout.Session, supabase: any) {
+        const subscriptionId = session.subscription as string;
+        const customerId = session.customer as string;
+        const metadata = session.metadata || {};
+
+        const companyId = metadata.companyId;
+
+        if (!companyId) {
+            console.error('No companyId in session metadata');
+            return;
+        }
+
+        // 1. Update Company with Stripe Customer ID
+        await supabase
+            .from('companies')
+            .update({ stripe_customer_id: customerId })
+            .eq('id', companyId);
+
+        // 2. Create/Update Subscription
+        const stripeSub = await this.stripe.subscriptions.retrieve(subscriptionId);
+
+        await supabase
+            .from('subscriptions')
+            .upsert({
+                company_id: companyId,
+                stripe_subscription_id: subscriptionId,
+                status: stripeSub.status,
+                current_period_start: new Date(stripeSub.current_period_start * 1000).toISOString(),
+                current_period_end: new Date(stripeSub.current_period_end * 1000).toISOString(),
+                plan_id: metadata.planId
+            }, { onConflict: 'company_id' });
+
+        console.log(`Subscription activated for company ${companyId}`);
+    }
+
+    private async handleInvoicePaymentSucceeded(invoice: Stripe.Invoice, supabase: any) {
+        const subscriptionId = invoice.subscription as string;
+        const stripeSub = await this.stripe.subscriptions.retrieve(subscriptionId);
+
+        await supabase
+            .from('subscriptions')
+            .update({
+                status: stripeSub.status,
+                current_period_start: new Date(stripeSub.current_period_start * 1000).toISOString(),
+                current_period_end: new Date(stripeSub.current_period_end * 1000).toISOString(),
+            })
+            .eq('stripe_subscription_id', subscriptionId);
+
+        console.log(`Subscription renewed for subscription ${subscriptionId}`);
+    }
+
+    private async handleSubscriptionDeleted(subscription: Stripe.Subscription, supabase: any) {
+        await supabase
+            .from('subscriptions')
+            .update({ status: 'canceled' })
+            .eq('stripe_subscription_id', subscription.id);
+
+        console.log(`Subscription canceled: ${subscription.id}`);
+    }
+}

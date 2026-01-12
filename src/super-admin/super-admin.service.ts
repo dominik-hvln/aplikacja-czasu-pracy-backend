@@ -10,15 +10,56 @@ export class SuperAdminService {
 
     async getAllCompanies() {
         const supabase = this.supabaseService.getClient();
+        // Pobieramy wszystkie firmy
         const { data, error } = await supabase
             .from('companies')
-            .select('*')
+            .select('*, subscriptions(*)') // Include subscription
             .order('created_at', { ascending: false });
 
         if (error) {
             throw new InternalServerErrorException(`Błąd pobierania firm: ${error.message}`);
         }
         return data;
+    }
+
+    async getStats() {
+        const supabase = this.supabaseService.getClient();
+
+        // 1. Total Companies
+        const { count: companiesCount, error: countError } = await supabase
+            .from('companies')
+            .select('*', { count: 'exact', head: true });
+
+        // 2. New Companies (this month)
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
+
+        const { count: newCompaniesCount } = await supabase
+            .from('companies')
+            .select('*', { count: 'exact', head: true })
+            .gte('created_at', startOfMonth.toISOString());
+
+        // 3. Active Subscriptions & MRR
+        const { data: activeSubs, error: subsError } = await supabase
+            .from('subscriptions')
+            .select('plan_id, plans(price_monthly)')
+            .in('status', ['active', 'trialing']);
+
+        if (countError || subsError) {
+            throw new InternalServerErrorException('Failed to fetch stats');
+        }
+
+        const totalMrr = activeSubs?.reduce((acc, sub: any) => {
+            return acc + (sub.plans?.price_monthly || 0);
+        }, 0) || 0;
+
+        return {
+            totalCompanies: companiesCount || 0,
+            newCompanies: newCompaniesCount || 0,
+            activeSubscriptions: activeSubs?.length || 0,
+            mrr: totalMrr
+        };
     }
 
     async getCompany(id: string) {
