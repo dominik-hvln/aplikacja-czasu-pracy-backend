@@ -13,8 +13,9 @@ import { LocationQrCodesModule } from './location-qr-codes/location-qr-codes.mod
 import { TaskAssignmentsModule } from './task-assignments/task-assignments.module';
 import { ActivityModule } from './activity/activity.module';
 import { DashboardModule } from './dashboard/dashboard.module';
-import {ReportTemplatesModule} from "./report-templates/report-templates.module";
-import {ReportsModule} from "./reports/reports.module";
+import { ReportTemplatesModule } from "./report-templates/report-templates.module";
+import { ReportsModule } from "./reports/reports.module";
+import { SubscriptionModule } from './subscription/subscription.module';
 
 @Module({
     imports: [
@@ -32,8 +33,9 @@ import {ReportsModule} from "./reports/reports.module";
         DashboardModule,
         ReportTemplatesModule,
         ReportsModule,
+        SubscriptionModule,
     ],
     controllers: [AppController],
     providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }

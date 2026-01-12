@@ -4,10 +4,10 @@ import { CreateUserDto } from './dto/create-user.dto';
 
 @Injectable()
 export class UsersService {
-    constructor(private readonly supabaseService: SupabaseService) {}
+    constructor(private readonly supabaseService: SupabaseService) { }
 
     async create(createUserDto: CreateUserDto, companyId: string) {
-        const supabase = this.supabaseService.getClient();
+        const supabase = this.supabaseService.getAdminClient();
 
         const { data: authData, error: authError } = await supabase.auth.admin.createUser({
             email: createUserDto.email,

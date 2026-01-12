@@ -8,7 +8,7 @@ import { Roles, Role } from '../auth/roles.decorator';
 @Controller('tasks')
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 export class TasksController {
-    constructor(private readonly tasksService: TasksService) {}
+    constructor(private readonly tasksService: TasksService) { }
 
     // Endpoint dla managera/admina - pobiera WSZYSTKIE taski
     @Get()
@@ -20,7 +20,7 @@ export class TasksController {
 
     // NOWY Endpoint dla pracownika - pobiera TYLKO PRZYPISANE taski
     @Get('my')
-    @Roles(Role.Employee)
+    @Roles(Role.Employee, Role.Admin, Role.Manager)
     findMyTasks(@Req() req) {
         const { id: userId, company_id: companyId } = req.user;
         return this.tasksService.findMyTasks(userId, companyId);

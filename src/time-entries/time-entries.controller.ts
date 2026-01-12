@@ -1,14 +1,14 @@
-import {Controller, Post, Body, UseGuards, Req, Get, Query, Patch, Param, Delete} from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Req, Get, Query, Patch, Param, Delete } from '@nestjs/common';
 import { TimeEntriesService } from './time-entries.service';
 import { AuthGuard } from '@nestjs/passport';
-import {Role, Roles} from "../auth/roles.decorator";
-import {UpdateTimeEntryDto} from "./dto/update-time-entry.dto";
+import { Role, Roles } from "../auth/roles.decorator";
+import { UpdateTimeEntryDto } from "./dto/update-time-entry.dto";
 import { SwitchTaskDto } from './dto/switch-task.dto';
 
 @Controller('time-entries')
 @UseGuards(AuthGuard('jwt'))
 export class TimeEntriesController {
-    constructor(private readonly timeEntriesService: TimeEntriesService) {}
+    constructor(private readonly timeEntriesService: TimeEntriesService) { }
 
     @Post('scan')
     handleScan(@Body() body: { qrCodeValue: string, location?: { latitude: number, longitude: number }, timestamp?: string }, @Req() req) {
@@ -68,7 +68,7 @@ export class TimeEntriesController {
     }
 
     @Get('my-active')
-    @Roles(Role.Employee) // Dostępny tylko dla pracownika
+    @Roles(Role.Employee, Role.Admin, Role.Manager) // Dostępny dla wszystkich ról
     findMyActiveEntry(@Req() req) {
         const userId = req.user.id;
         return this.timeEntriesService.findActiveForUser(userId);
