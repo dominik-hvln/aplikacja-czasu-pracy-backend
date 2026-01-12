@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { isAfter } from 'date-fns';
 
 @Injectable()
 export class SubscriptionService {
@@ -7,57 +8,78 @@ export class SubscriptionService {
 
     constructor(private readonly supabaseService: SupabaseService) { }
 
+    get supabase() {
+        return this.supabaseService.getClient();
+    }
+
     /**
      * Checks if a company has an active subscription or is within trial period.
      */
     async isCompanyActive(companyId: string): Promise<boolean> {
         if (!companyId) return false;
 
-        const supabase = this.supabaseService.getClient();
-
-        // 1. Get subscription status
-        const { data: subscription, error } = await supabase
+        const { data: sub } = await this.supabase
             .from('subscriptions')
-            .select('status, trial_end, current_period_end')
+            .select('status, current_period_end')
             .eq('company_id', companyId)
-            .single();
+            .maybeSingle();
 
-        if (error || !subscription) {
-            // No subscription found -> Assuming not active
-            return false;
-        }
+        if (!sub) return false; // No subscription = inactive
 
-        // 2. Check status
-        // valid statuses: active, trialing
-        if (['active', 'trialing'].includes(subscription.status)) {
+        // Check status
+        if (sub.status === 'active' || sub.status === 'trialing') {
             return true;
         }
 
-        // 3. Check past_due grace period (optional, strict for now)
+        // Check expiration
+        if (sub.status === 'canceled' && sub.current_period_end) {
+            return isAfter(new Date(sub.current_period_end), new Date());
+        }
+
         return false;
     }
 
-    /**
-     * Checks if a specific module is enabled for a company.
-     * Logic: Check `company_modules` table.
-     */
-    async isModuleEnabled(companyId: string, moduleCode: string): Promise<boolean> {
-        if (!companyId) return false;
-
-        const supabase = this.supabaseService.getClient();
-
-        const { data, error } = await supabase
-            .from('company_modules')
-            .select('module_code')
+    async getStatus(companyId: string) {
+        const { data, error } = await this.supabase.from('subscriptions')
+            .select('*, plans(*)')
             .eq('company_id', companyId)
-            .eq('module_code', moduleCode)
-            .single();
+            .maybeSingle();
 
-        if (error || !data) {
-            return false;
+        if (error && error.code !== 'PGRST116') {
+            throw new Error(error.message);
         }
 
-        return true;
+        if (!data) {
+            return { status: 'none', plan: null };
+        }
+
+        return data;
+    }
+
+    async checkLimits(companyId: string, limitKey: string, currentUsage: number): Promise<boolean> {
+        const { status, plans: plan } = await this.getStatus(companyId);
+
+        if (status !== 'active' && status !== 'trialing') return false;
+        if (!plan) return false;
+
+        const limits = plan.limits || {};
+        const limit = limits[limitKey];
+
+        if (limit === undefined) return true; // No limit defined = unlimited
+        if (limit === -1) return true; // Explicit unlimited
+
+        return currentUsage < limit;
+    }
+
+    async getBasicPlanId() {
+        // Safe check for basic plan
+        const { data: plan } = await this.supabase
+            .from('plans')
+            .select('id')
+            .eq('code', 'basic')
+            .maybeSingle();
+
+        return plan?.id || null;
     }
 
     /**

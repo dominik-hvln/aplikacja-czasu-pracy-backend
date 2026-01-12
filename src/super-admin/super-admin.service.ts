@@ -229,7 +229,7 @@ export class SuperAdminService {
         const supabase = this.supabaseService.getClient();
 
         // Fetch existing plan
-        const { data: existingPlan } = await supabase.from('plans').select('*').eq('id', id).single();
+        const { data: existingPlan } = await supabase.from('plans').select('*').eq('id', id).maybeSingle();
         if (!existingPlan) throw new BadRequestException('Plan not found');
 
         const updates: any = { ...dto };
@@ -257,7 +257,7 @@ export class SuperAdminService {
             .update(updates)
             .eq('id', id)
             .select()
-            .single();
+            .maybeSingle();
 
         if (error) throw new InternalServerErrorException(error.message);
         return data;
@@ -321,7 +321,7 @@ export class SuperAdminService {
         const supabase = this.supabaseService.getAdminClient();
 
         // 1. Update subscription (create or update)
-        const { data: sub } = await supabase.from('subscriptions').select('id').eq('company_id', companyId).single();
+        const { data: sub } = await supabase.from('subscriptions').select('id').eq('company_id', companyId).maybeSingle();
 
         let error;
         if (sub) {
