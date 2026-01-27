@@ -9,7 +9,9 @@ export class SubscriptionService {
     constructor(private readonly supabaseService: SupabaseService) { }
 
     get supabase() {
-        return this.supabaseService.getClient();
+        // Use Admin Client to bypass RLS, as this service is called by authenticated controllers
+        // or background processes that need full access.
+        return this.supabaseService.getAdminClient();
     }
 
     /**

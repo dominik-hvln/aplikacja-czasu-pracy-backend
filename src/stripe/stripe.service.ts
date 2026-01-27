@@ -81,7 +81,7 @@ export class StripeService {
 
         const planId = metadata.planId;
 
-        await supabase
+        const { error: upsertError } = await supabase
             .from('subscriptions')
             .upsert({
                 company_id: companyId,
@@ -91,6 +91,13 @@ export class StripeService {
                 current_period_end: currentPeriodEnd,
                 plan_id: planId
             }, { onConflict: 'company_id' });
+
+        if (upsertError) {
+            console.error('Subscription UPSERT failed:', upsertError);
+            throw new InternalServerErrorException(`DB Error: ${upsertError.message}`);
+        } else {
+            console.log('Subscription UPSERT success');
+        }
 
         // 3. Sync Modules from Plan to Company
         if (planId) {
