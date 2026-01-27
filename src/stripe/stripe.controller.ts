@@ -103,4 +103,13 @@ export class StripeController {
             { companyId: body.companyId, planId: body.planId }
         );
     }
+
+    @Post('verify-session')
+    @UseGuards(AuthGuard('jwt'))
+    async verifySession(@Body() body: { sessionId: string }) {
+        if (!body.sessionId) throw new BadRequestException('Missing sessionId');
+
+        const supabaseAdmin = this.supabaseService.getAdminClient();
+        return this.stripeService.verifySession(body.sessionId, supabaseAdmin);
+    }
 }

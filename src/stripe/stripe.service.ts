@@ -26,7 +26,21 @@ export class StripeService {
 
     // ... (rest of methods)
 
-    private async handleCheckoutSessionCompleted(session: Stripe.Checkout.Session, supabase: any) {
+    async verifySession(sessionId: string, supabase: any) {
+        try {
+            const session = await this.stripe.checkout.sessions.retrieve(sessionId);
+            if (session.payment_status === 'paid') {
+                await this.processCheckoutSession(session, supabase);
+                return { status: 'active' };
+            }
+            return { status: 'pending' };
+        } catch (error) {
+            console.error('Verify session error:', error);
+            throw new InternalServerErrorException('Failed to verify session');
+        }
+    }
+
+    async processCheckoutSession(session: Stripe.Checkout.Session, supabase: any) {
         const subscriptionId = session.subscription as string;
         const customerId = session.customer as string;
         const metadata = session.metadata || {};
@@ -169,7 +183,7 @@ export class StripeService {
         switch (event.type) {
             case 'checkout.session.completed': {
                 const session = event.data.object as Stripe.Checkout.Session;
-                await this.handleCheckoutSessionCompleted(session, supabase);
+                await this.processCheckoutSession(session, supabase);
                 break;
             }
             case 'invoice.payment_succeeded': {
