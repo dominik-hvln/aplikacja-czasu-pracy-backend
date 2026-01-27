@@ -65,6 +65,20 @@ export class StripeService {
 
         // 2. Create/Update Subscription
         const stripeSub = await this.stripe.subscriptions.retrieve(subscriptionId);
+
+        console.log('Stripe Subscription loaded:', stripeSub.id, stripeSub.status);
+
+        const subData = stripeSub as any;
+
+        // Safely extract dates
+        const currentPeriodStart = subData.current_period_start
+            ? new Date(subData.current_period_start * 1000).toISOString()
+            : new Date().toISOString();
+
+        const currentPeriodEnd = subData.current_period_end
+            ? new Date(subData.current_period_end * 1000).toISOString()
+            : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // Default +30 days
+
         const planId = metadata.planId;
 
         await supabase
@@ -73,8 +87,8 @@ export class StripeService {
                 company_id: companyId,
                 stripe_subscription_id: subscriptionId,
                 status: stripeSub.status,
-                current_period_start: new Date((stripeSub as any).current_period_start * 1000).toISOString(),
-                current_period_end: new Date((stripeSub as any).current_period_end * 1000).toISOString(),
+                current_period_start: currentPeriodStart,
+                current_period_end: currentPeriodEnd,
                 plan_id: planId
             }, { onConflict: 'company_id' });
 
