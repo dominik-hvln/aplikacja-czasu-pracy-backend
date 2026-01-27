@@ -28,15 +28,20 @@ export class StripeService {
 
     async verifySession(sessionId: string, supabase: any) {
         try {
+            console.log(`Verifying session: ${sessionId}`);
             const session = await this.stripe.checkout.sessions.retrieve(sessionId);
+
+            console.log('Session retrieved. Status:', session.payment_status);
+            console.log('Metadata:', session.metadata);
+
             if (session.payment_status === 'paid') {
                 await this.processCheckoutSession(session, supabase);
                 return { status: 'active' };
             }
-            return { status: 'pending' };
+            return { status: session.payment_status }; // 'unpaid' or 'no_payment_required'
         } catch (error) {
             console.error('Verify session error:', error);
-            throw new InternalServerErrorException('Failed to verify session');
+            throw new InternalServerErrorException(`Verification failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
 
