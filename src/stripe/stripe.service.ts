@@ -52,6 +52,8 @@ export class StripeService {
 
         const companyId = metadata.companyId;
 
+        console.log('Processing checkout session. Metadata:', JSON.stringify(metadata, null, 2));
+
         if (!companyId) {
             console.error('No companyId in session metadata');
             return;
@@ -81,22 +83,48 @@ export class StripeService {
 
         const planId = metadata.planId;
 
-        const { error: upsertError } = await supabase
+        // Check if subscription exists
+        const { data: existingSub } = await supabase
             .from('subscriptions')
-            .upsert({
-                company_id: companyId,
-                stripe_subscription_id: subscriptionId,
-                status: stripeSub.status,
-                current_period_start: currentPeriodStart,
-                current_period_end: currentPeriodEnd,
-                plan_id: planId
-            }, { onConflict: 'company_id' });
+            .select('id')
+            .eq('company_id', companyId)
+            .maybeSingle();
 
-        if (upsertError) {
-            console.error('Subscription UPSERT failed:', upsertError);
-            throw new InternalServerErrorException(`DB Error: ${upsertError.message}`);
+        let error;
+
+        if (existingSub) {
+            console.log(`Updating existing subscription for company ${companyId}`);
+            const { error: updateError } = await supabase
+                .from('subscriptions')
+                .update({
+                    stripe_subscription_id: subscriptionId,
+                    status: stripeSub.status,
+                    current_period_start: currentPeriodStart,
+                    current_period_end: currentPeriodEnd,
+                    plan_id: planId
+                })
+                .eq('company_id', companyId);
+            error = updateError;
         } else {
-            console.log('Subscription UPSERT success');
+            console.log(`Creating new subscription for company ${companyId}`);
+            const { error: insertError } = await supabase
+                .from('subscriptions')
+                .insert({
+                    company_id: companyId,
+                    stripe_subscription_id: subscriptionId,
+                    status: stripeSub.status,
+                    current_period_start: currentPeriodStart,
+                    current_period_end: currentPeriodEnd,
+                    plan_id: planId
+                });
+            error = insertError;
+        }
+
+        if (error) {
+            console.error('Subscription Update/Insert failed:', error);
+            throw new InternalServerErrorException(`DB Error: ${error.message}`);
+        } else {
+            console.log('Subscription saved successfully');
         }
 
         // 3. Sync Modules from Plan to Company

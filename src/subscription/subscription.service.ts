@@ -150,11 +150,20 @@ export class SubscriptionService {
     async syncPlanModulesToCompany(companyId: string, planId: string) {
         const supabase = this.supabaseService.getAdminClient();
 
+        this.logger.log(`Syncing modules for company ${companyId} and plan ${planId}`);
+
         // Get modules for the plan
-        const { data: planModules } = await supabase
+        const { data: planModules, error: pmError } = await supabase
             .from('plan_modules')
             .select('module_code')
             .eq('plan_id', planId);
+
+        if (pmError) {
+            this.logger.error(`Error fetching plan_modules: ${pmError.message}`);
+            return;
+        }
+
+        this.logger.log(`Found ${planModules?.length} modules for plan ${planId}: ${planModules?.map(m => m.module_code).join(', ')}`);
 
         if (!planModules || planModules.length === 0) return;
 
