@@ -18,7 +18,7 @@ export class AuthService {
         private readonly supabaseService: SupabaseService,
         private readonly jwtService: JwtService,
         private readonly config: ConfigService,
-    ) {}
+    ) { }
 
     // === WYSYŁKA MAILI przez RESEND (HTTPS) ===
     private async sendResendEmail(to: string, subject: string, html: string, text: string) {
@@ -137,7 +137,19 @@ export class AuthService {
             .from('users').select('*').eq('id', data.user.id).single();
         if (profileError) throw new InternalServerErrorException(profileError.message);
 
-        return { session: data.session, profile };
+        // Fetch enabled modules for company
+        let modules: string[] = [];
+        if (profile.company_id) {
+            const { data: modData } = await supabase
+                .from('company_modules')
+                .select('module_code')
+                .eq('company_id', profile.company_id);
+            if (modData) {
+                modules = modData.map(m => m.module_code);
+            }
+        }
+
+        return { session: data.session, profile: { ...profile, modules } };
     }
 
     // === 1) „Zapomniałem hasło” — generujemy recovery link i wysyłamy mailem przez Resend ===

@@ -421,4 +421,45 @@ export class SuperAdminService {
 
         await supabase.from('company_modules').insert(modulesToInsert);
     }
+
+    // --- PLAN MODULES ---
+
+    async getPlanModules(planId: string): Promise<string[]> {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('plan_modules')
+            .select('module_code')
+            .eq('plan_id', planId);
+
+        if (error) throw new InternalServerErrorException(error.message);
+        return data?.map(pm => pm.module_code) || [];
+    }
+
+    async setPlanModules(planId: string, moduleCodes: string[]) {
+        const supabase = this.supabaseService.getAdminClient();
+
+        // 1. Delete existing
+        const { error: delError } = await supabase
+            .from('plan_modules')
+            .delete()
+            .eq('plan_id', planId);
+
+        if (delError) throw new InternalServerErrorException(delError.message);
+
+        // 2. Insert new
+        if (moduleCodes.length > 0) {
+            const toInsert = moduleCodes.map(code => ({
+                plan_id: planId,
+                module_code: code
+            }));
+
+            const { error: insError } = await supabase
+                .from('plan_modules')
+                .insert(toInsert);
+
+            if (insError) throw new InternalServerErrorException(insError.message);
+        }
+
+        return { message: 'Plan modules updated', modules: moduleCodes };
+    }
 }

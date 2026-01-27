@@ -1,12 +1,24 @@
-import { Injectable, InternalServerErrorException, ConflictException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 import { CreateUserDto } from './dto/create-user.dto';
 
 @Injectable()
 export class UsersService {
-    constructor(private readonly supabaseService: SupabaseService) { }
+    constructor(
+        private readonly supabaseService: SupabaseService,
+        private readonly subscriptionService: SubscriptionService
+    ) { }
 
     async create(createUserDto: CreateUserDto, companyId: string) {
+        // Check Limits
+        const usersCount = await this.countForCompany(companyId);
+        const canCreate = await this.subscriptionService.checkLimits(companyId, 'max_users', usersCount);
+
+        if (!canCreate) {
+            throw new ForbiddenException('Osiągnięto limit użytkowników dla Twojego planu.');
+        }
+
         const supabase = this.supabaseService.getAdminClient();
 
         const { data: authData, error: authError } = await supabase.auth.admin.createUser({
@@ -42,6 +54,17 @@ export class UsersService {
         }
 
         return profileData;
+    }
+
+    async countForCompany(companyId: string): Promise<number> {
+        const supabase = this.supabaseService.getClient();
+        const { count, error } = await supabase
+            .from('users')
+            .select('*', { count: 'exact', head: true })
+            .eq('company_id', companyId);
+
+        if (error) return 0;
+        return count || 0;
     }
 
     async findAllForCompany(companyId: string) {

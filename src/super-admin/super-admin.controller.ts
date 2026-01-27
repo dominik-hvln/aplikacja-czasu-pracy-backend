@@ -122,4 +122,18 @@ export class SuperAdminController {
     toggleModule(@Param('id') id: string, @Body() dto: ToggleModuleDto) {
         return this.superAdminService.toggleModuleForCompany(id, dto.moduleCode, dto.isEnabled);
     }
+
+    // --- PLAN MODULES ---
+
+    @Get('plans/:id/modules')
+    @Roles(Role.SuperAdmin)
+    getPlanModules(@Param('id') id: string) {
+        return this.superAdminService.getPlanModules(id);
+    }
+
+    @Put('plans/:id/modules')
+    @Roles(Role.SuperAdmin)
+    setPlanModules(@Param('id') id: string, @Body() dto: { moduleCodes: string[] }) {
+        return this.superAdminService.setPlanModules(id, dto.moduleCodes);
+    }
 }

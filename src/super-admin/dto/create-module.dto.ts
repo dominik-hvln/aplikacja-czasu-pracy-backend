@@ -8,6 +8,10 @@ export class CreateModuleDto {
     name: string;
 
     @IsString()
+    @IsString()
     @IsOptional()
     description?: string;
+
+    @IsOptional()
+    is_active?: boolean;
 }

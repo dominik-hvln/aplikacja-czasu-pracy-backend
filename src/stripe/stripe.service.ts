@@ -1,12 +1,16 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SubscriptionService } from '../subscription/subscription.service';
 import Stripe from 'stripe';
 
 @Injectable()
 export class StripeService {
     private stripe: Stripe;
 
-    constructor(private readonly configService: ConfigService) {
+    constructor(
+        private readonly configService: ConfigService,
+        private readonly subscriptionService: SubscriptionService
+    ) {
         const apiKey = this.configService.get<string>('STRIPE_SECRET_KEY');
         if (!apiKey) {
             throw new Error('STRIPE_SECRET_KEY not defined');
@@ -20,7 +24,49 @@ export class StripeService {
         return this.stripe;
     }
 
-    // --- PRODUCTS & PRICES ---
+    // ... (rest of methods)
+
+    private async handleCheckoutSessionCompleted(session: Stripe.Checkout.Session, supabase: any) {
+        const subscriptionId = session.subscription as string;
+        const customerId = session.customer as string;
+        const metadata = session.metadata || {};
+
+        const companyId = metadata.companyId;
+
+        if (!companyId) {
+            console.error('No companyId in session metadata');
+            return;
+        }
+
+        // 1. Update Company with Stripe Customer ID
+        await supabase
+            .from('companies')
+            .update({ stripe_customer_id: customerId })
+            .eq('id', companyId);
+
+        // 2. Create/Update Subscription
+        const stripeSub = await this.stripe.subscriptions.retrieve(subscriptionId);
+        const planId = metadata.planId;
+
+        await supabase
+            .from('subscriptions')
+            .upsert({
+                company_id: companyId,
+                stripe_subscription_id: subscriptionId,
+                status: stripeSub.status,
+                current_period_start: new Date((stripeSub as any).current_period_start * 1000).toISOString(),
+                current_period_end: new Date((stripeSub as any).current_period_end * 1000).toISOString(),
+                plan_id: planId
+            }, { onConflict: 'company_id' });
+
+        // 3. Sync Modules from Plan to Company
+        if (planId) {
+            await this.subscriptionService.syncPlanModulesToCompany(companyId, planId);
+            console.log(`Modules synced for company ${companyId} from plan ${planId}`);
+        }
+
+        console.log(`Subscription activated for company ${companyId}`);
+    }
 
     async createProduct(name: string) {
         try {
@@ -141,40 +187,6 @@ export class StripeService {
         }
     }
 
-    private async handleCheckoutSessionCompleted(session: Stripe.Checkout.Session, supabase: any) {
-        const subscriptionId = session.subscription as string;
-        const customerId = session.customer as string;
-        const metadata = session.metadata || {};
-
-        const companyId = metadata.companyId;
-
-        if (!companyId) {
-            console.error('No companyId in session metadata');
-            return;
-        }
-
-        // 1. Update Company with Stripe Customer ID
-        await supabase
-            .from('companies')
-            .update({ stripe_customer_id: customerId })
-            .eq('id', companyId);
-
-        // 2. Create/Update Subscription
-        const stripeSub = await this.stripe.subscriptions.retrieve(subscriptionId);
-
-        await supabase
-            .from('subscriptions')
-            .upsert({
-                company_id: companyId,
-                stripe_subscription_id: subscriptionId,
-                status: stripeSub.status,
-                current_period_start: new Date((stripeSub as any).current_period_start * 1000).toISOString(),
-                current_period_end: new Date((stripeSub as any).current_period_end * 1000).toISOString(),
-                plan_id: metadata.planId
-            }, { onConflict: 'company_id' });
-
-        console.log(`Subscription activated for company ${companyId}`);
-    }
 
     private async handleInvoicePaymentSucceeded(invoice: Stripe.Invoice, supabase: any) {
         // subscription can be string or object. Cast to any to be safe or check type.
