@@ -3,6 +3,7 @@ import {
     InternalServerErrorException,
     ConflictException,
     UnauthorizedException,
+    Logger,
 } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { RegisterDto } from './dto/register.dto';
@@ -14,6 +15,8 @@ import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class AuthService {
+    private readonly logger = new Logger(AuthService.name);
+
     constructor(
         private readonly supabaseService: SupabaseService,
         private readonly jwtService: JwtService,
@@ -39,7 +42,6 @@ export class AuthService {
 
         const body = await res.text().catch(() => '');
         if (!res.ok) {
-            // 401 → zły/brak klucza; 422 → invalid_from lub niezweryfikowana domena
             throw new InternalServerErrorException(
                 `Resend error ${res.status}: ${body || 'brak treści'}`
             );
@@ -47,17 +49,22 @@ export class AuthService {
         return body;
     }
 
-    // === REJESTRACJA (jak dotąd) ===
+    // === REJESTRACJA ===
     async register(registerDto: RegisterDto) {
         const supabase = this.supabaseService.getClient();
         const supabaseAdmin = this.supabaseService.getAdminClient();
 
         const { data: companyData, error: companyError } = await supabase
             .from('companies').insert({ name: registerDto.companyName }).select().single();
-        if (companyError) throw new InternalServerErrorException(companyError.message);
+
+        if (companyError) {
+            this.logger.error(`Błąd tworzenia firmy: ${JSON.stringify(companyError)}`);
+            throw new InternalServerErrorException(`Błąd tworzenia firmy: ${companyError.message}`);
+        }
 
         const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
 
+        this.logger.log(`Generowanie linku rejestracyjnego dla: ${registerDto.email}`);
         const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
             type: 'signup',
             email: registerDto.email,
@@ -67,24 +74,25 @@ export class AuthService {
                 redirectTo: `${appUrl}/auth/confirm`,
             },
         });
+
         if (linkErr) {
+            this.logger.error(`Błąd generateLink: ${JSON.stringify(linkErr)}`);
             await supabase.from('companies').delete().eq('id', companyData.id);
             if (linkErr.message?.includes('User already registered')) {
                 throw new ConflictException('Użytkownik o tym adresie e-mail już istnieje.');
             }
-            throw new InternalServerErrorException(linkErr.message);
+            throw new InternalServerErrorException(`Błąd rejestracji w Supabase: ${linkErr.message}`);
         }
 
         const userId = linkData?.user?.id;
         const confirmUrl = linkData?.properties?.action_link;
         if (!userId || !confirmUrl) {
+            this.logger.error('Nie udało się wygenerować userId lub confirmUrl');
             await supabase.from('companies').delete().eq('id', companyData.id);
             throw new InternalServerErrorException('Nie udało się wygenerować linku aktywacyjnego.');
         }
 
-        // BEZPIECZNIE: upsert profilu (jeśli trigger nie zadziała)
-        const supabaseAdminDb = this.supabaseService.getAdminClient();
-        const { error: profileError } = await supabaseAdminDb
+        const { error: profileError } = await supabaseAdmin
             .from('users')
             .upsert(
                 {
@@ -97,28 +105,33 @@ export class AuthService {
                 },
                 { onConflict: 'id' }
             );
+
         if (profileError) {
+            this.logger.error(`Błąd tworzenia profilu users: ${JSON.stringify(profileError)}`);
             await supabaseAdmin.auth.admin.deleteUser(userId);
             await supabase.from('companies').delete().eq('id', companyData.id);
-            throw new InternalServerErrorException(profileError.message);
+            throw new InternalServerErrorException(`Błąd profilu: ${profileError.message}`);
         }
 
-        // Mail aktywacyjny przez Resend
-        await this.sendResendEmail(
-            registerDto.email,
-            'Potwierdź swój adres e-mail',
-            `
-        <p>Cześć ${registerDto.firstName || ''},</p>
-        <p>Dokończ rejestrację klikając w link poniżej:</p>
-        <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
-      `,
-            `Potwierdź rejestrację: ${confirmUrl}`
-        );
+        try {
+            await this.sendResendEmail(
+                registerDto.email,
+                'Potwierdź swój adres e-mail',
+                `
+                <p>Cześć ${registerDto.firstName || ''},</p>
+                <p>Dokończ rejestrację klikając w link poniżej:</p>
+                <p><a href="${confirmUrl}" target="_blank" rel="noopener noreferrer">${confirmUrl}</a></p>
+                `,
+                `Potwierdź rejestrację: ${confirmUrl}`
+            );
+        } catch (emailErr: any) {
+            this.logger.error(`Błąd wysyłki e-maila: ${emailErr.message}`);
+        }
 
         return { message: 'Rejestracja udana. Sprawdź e-mail, aby aktywować konto.' };
     }
 
-    // === LOGOWANIE (jak dotąd) ===
+    // === LOGOWANIE ===
     async login(loginDto: LoginDto) {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -127,17 +140,17 @@ export class AuthService {
         });
 
         if (error) {
+            this.logger.warn(`Błąd logowania dla ${loginDto.email}: ${error.message} (status: ${error.status})`);
             if (error.message === 'Email not confirmed') {
                 throw new UnauthorizedException('Konto nie zostało aktywowane. Sprawdź e-mail.');
             }
-            throw new UnauthorizedException('Nieprawidłowy e-mail lub hasło.');
+            throw new UnauthorizedException(`Błąd logowania: ${error.message}`);
         }
 
         const { data: profile, error: profileError } = await supabase
             .from('users').select('*').eq('id', data.user.id).single();
         if (profileError) throw new InternalServerErrorException(profileError.message);
 
-        // Fetch enabled modules for company
         let modules: string[] = [];
         if (profile.company_id) {
             const { data: modData } = await supabase
@@ -154,7 +167,6 @@ export class AuthService {
 
     async getUserProfile(userId: string) {
         const supabase = this.supabaseService.getClient();
-
         const { data: profile, error: profileError } = await supabase
             .from('users').select('*').eq('id', userId).single();
 
@@ -177,12 +189,10 @@ export class AuthService {
         return { ...profile, modules };
     }
 
-    // === 1) „Zapomniałem hasło” — generujemy recovery link i wysyłamy mailem przez Resend ===
     async forgotPassword(dto: ForgotPasswordDto) {
         const supabaseAdmin = this.supabaseService.getAdminClient();
         const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
 
-        // Nie zdradzamy, czy email istnieje — zawsze „OK”
         try {
             const { data: linkData, error } = await supabaseAdmin.auth.admin.generateLink({
                 type: 'recovery',
@@ -193,42 +203,37 @@ export class AuthService {
 
             const resetUrl = linkData?.properties?.action_link;
             if (!resetUrl) {
-                // „zjadamy” szczegóły, ale logujemy na serwerze
                 console.warn('[forgotPassword] Brak action_link w generateLink');
-                return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu hasła.' };
+                return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu haseł.' };
             }
 
             await this.sendResendEmail(
                 dto.email,
                 'Reset hasła',
                 `
-          <p>Otrzymaliśmy prośbę o zresetowanie hasła.</p>
-          <p>Kliknij w link, aby ustawić nowe hasło:</p>
-          <p><a href="${resetUrl}" target="_blank" rel="noopener noreferrer">${resetUrl}</a></p>
-          <p>Jeśli to nie Ty, zignoruj tę wiadomość.</p>
-        `,
+                <p>Otrzymaliśmy prośbę o zresetowanie hasła.</p>
+                <p>Kliknij w link, aby ustawić nowe hasło:</p>
+                <p><a href="${resetUrl}" target="_blank" rel="noopener noreferrer">${resetUrl}</a></p>
+                <p>Jeśli to nie Ty, zignoruj tę wiadomość.</p>
+                `,
                 `Zresetuj hasło: ${resetUrl}`
             );
         } catch (e) {
-            // nie zdradzamy szczegółów; zostawiamy ten sam komunikat
             console.warn('[forgotPassword] error:', e instanceof Error ? e.message : e);
         }
         return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu hasła.' };
     }
 
-    // === 2) Ustawienie nowego hasła po kliknięciu w link (token z URL) ===
     async resetPassword(dto: ResetPasswordDto) {
-        const supabase = this.supabaseService.getClient();      // public client
-        const supabaseAdmin = this.supabaseService.getAdminClient(); // admin
+        const supabase = this.supabaseService.getClient();
+        const supabaseAdmin = this.supabaseService.getAdminClient();
 
-        // Z tokenu „recovery” pobierz usera (bez sesji)
         const { data: userData, error: getUserErr } = await supabase.auth.getUser(dto.token);
         if (getUserErr || !userData?.user?.id) {
             throw new UnauthorizedException('Token jest nieprawidłowy lub wygasł.');
         }
         const userId = userData.user.id;
 
-        // Zmień hasło jako admin (bez logowania użytkownika)
         const { error: updErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
             password: dto.password,
         });
@@ -239,7 +244,6 @@ export class AuthService {
         return { message: 'Hasło zostało zaktualizowane. Możesz się zalogować.' };
     }
 
-    // (opcjonalnie) Reset przez magic link + Resend (re-send)
     async resendVerification(email: string) {
         const supabaseAdmin = this.supabaseService.getAdminClient();
         const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
