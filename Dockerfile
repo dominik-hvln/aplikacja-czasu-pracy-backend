@@ -24,8 +24,8 @@ WORKDIR /app
 # Kopiowanie plików package
 COPY package*.json ./
 
-# Instalacja tylko production dependencies
-RUN npm ci --only=production
+# Instalacja tylko production dependencies oraz curl dla healthchecku
+RUN apk add --no-cache curl && npm ci --only=production
 
 # Kopiowanie zbudowanej aplikacji
 COPY --from=builder /app/dist ./dist
