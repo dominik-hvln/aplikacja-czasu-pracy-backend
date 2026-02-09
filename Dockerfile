@@ -5,14 +5,14 @@ WORKDIR /app
 # Kopiowanie plików package
 COPY package*.json ./
 
-# Instalacja zależności
+# Instalacja wszystkich zależności (w tym devDependencies potrzebnych do buildu)
 RUN npm ci
 
 # Kopiowanie kodu źródłowego
 COPY . .
 
-# Build aplikacji
-RUN npm run build
+# Build aplikacji (używamy npx dla pewności, że znajdzie nest cli)
+RUN npx nest build
 
 # === PRODUCTION STAGE ===
 FROM node:20-alpine AS production
