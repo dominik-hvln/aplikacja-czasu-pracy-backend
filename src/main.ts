@@ -25,6 +25,7 @@ async function bootstrap() {
         'http://localhost',            // Android (Capacitor)
         'capacitor://localhost',       // iOS (Capacitor)
         'https://kadromierz.vercel.app',
+        'https://app.effixy.pl',
     ]);
 
     app.enableCors({

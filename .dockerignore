@@ -1,0 +1,25 @@
+# Ignoruj node_modules
+node_modules/
+
+# Ignoruj pliki dev
+*.log
+npm-debug.log*
+.env
+.env.local
+.env.*.local
+
+# Ignoruj pliki testowe
+coverage/
+*.spec.ts
+test/
+
+# Ignoruj pliki IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Ignoruj pliki tymczasowe
+.DS_Store
+*.tmp

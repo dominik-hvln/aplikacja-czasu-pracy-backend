@@ -152,6 +152,31 @@ export class AuthService {
         return { session: data.session, profile: { ...profile, modules } };
     }
 
+    async getUserProfile(userId: string) {
+        const supabase = this.supabaseService.getClient();
+
+        const { data: profile, error: profileError } = await supabase
+            .from('users').select('*').eq('id', userId).single();
+
+        if (profileError || !profile) {
+            throw new UnauthorizedException('Nie znaleziono użytkownika.');
+        }
+
+        let modules: string[] = [];
+        if (profile.company_id) {
+            const { data: modData } = await supabase
+                .from('company_modules')
+                .select('module_code')
+                .eq('company_id', profile.company_id);
+
+            if (modData) {
+                modules = modData.map(m => m.module_code);
+            }
+        }
+
+        return { ...profile, modules };
+    }
+
     // === 1) „Zapomniałem hasło” — generujemy recovery link i wysyłamy mailem przez Resend ===
     async forgotPassword(dto: ForgotPasswordDto) {
         const supabaseAdmin = this.supabaseService.getAdminClient();
