@@ -12,41 +12,47 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class AuthService {
     private readonly logger = new Logger(AuthService.name);
+    private transporter: nodemailer.Transporter;
 
     constructor(
         private readonly supabaseService: SupabaseService,
         private readonly jwtService: JwtService,
         private readonly config: ConfigService,
-    ) { }
-
-    // === WYSYŁKA MAILI przez RESEND (HTTPS) ===
-    private async sendResendEmail(to: string, subject: string, html: string, text: string) {
-        const apiKey = this.config.get<string>('RESEND_API_KEY');
-        if (!apiKey) {
-            throw new InternalServerErrorException('Brak RESEND_API_KEY w konfiguracji.');
-        }
-        const fromHeader = this.config.get<string>('MAIL_FROM') || 'onboarding@resend.dev';
-
-        const res = await fetch('https://api.resend.com/emails', {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
+    ) {
+        this.transporter = nodemailer.createTransport({
+            host: this.config.get<string>('SMTP_HOST'),
+            port: this.config.get<number>('SMTP_PORT') || 587,
+            secure: this.config.get<number>('SMTP_PORT') === 465,
+            auth: {
+                user: this.config.get<string>('SMTP_USER'),
+                pass: this.config.get<string>('SMTP_PASS'),
             },
-            body: JSON.stringify({ from: fromHeader, to, subject, html, text }),
         });
+    }
 
-        const body = await res.text().catch(() => '');
-        if (!res.ok) {
-            throw new InternalServerErrorException(
-                `Resend error ${res.status}: ${body || 'brak treści'}`
-            );
+    // === WYSYŁKA MAILI przez SMTP (Nodemailer) ===
+    private async sendSmtpEmail(to: string, subject: string, html: string, text: string) {
+        const fromHeader = this.config.get<string>('MAIL_FROM') || '"Aplikacja Czasu Pracy" <no-reply@localhost>';
+
+        try {
+            const info = await this.transporter.sendMail({
+                from: fromHeader,
+                to,
+                subject,
+                text,
+                html,
+            });
+            this.logger.log(`Wiadomość e-mail wysłana do ${to}. MessageId: ${info.messageId}`);
+            return info;
+        } catch (error: any) {
+            this.logger.error(`Błąd wysyłki e-maila SMTP do ${to}: ${error.message}`);
+            throw new InternalServerErrorException(`Nie udało się wysłać e-maila: ${error.message}`);
         }
-        return body;
     }
 
     // === REJESTRACJA ===
@@ -114,7 +120,7 @@ export class AuthService {
         }
 
         try {
-            await this.sendResendEmail(
+            await this.sendSmtpEmail(
                 registerDto.email,
                 'Potwierdź swój adres e-mail',
                 `
@@ -207,7 +213,7 @@ export class AuthService {
                 return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu haseł.' };
             }
 
-            await this.sendResendEmail(
+            await this.sendSmtpEmail(
                 dto.email,
                 'Reset hasła',
                 `
@@ -255,7 +261,7 @@ export class AuthService {
         if (error) throw new InternalServerErrorException(error.message);
         const confirmUrl = linkData?.properties?.action_link;
         if (confirmUrl) {
-            await this.sendResendEmail(
+            await this.sendSmtpEmail(
                 email,
                 'Potwierdź adres e-mail',
                 `<p>Kliknij, aby potwierdzić: <a href="${confirmUrl}">${confirmUrl}</a></p>`,

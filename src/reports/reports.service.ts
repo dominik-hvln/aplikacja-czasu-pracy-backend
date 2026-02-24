@@ -4,55 +4,49 @@ import { CreateReportDto } from './dto/create-report.dto';
 import { PdfService } from './pdf.service';
 import { ConfigService } from '@nestjs/config';
 
+import * as nodemailer from 'nodemailer';
+
 @Injectable()
 export class ReportsService {
+    private transporter: nodemailer.Transporter;
+
     constructor(
         private readonly supabaseService: SupabaseService,
         private readonly pdfService: PdfService,
         private readonly config: ConfigService,
-    ) { }
+    ) {
+        this.transporter = nodemailer.createTransport({
+            host: this.config.get<string>('SMTP_HOST'),
+            port: this.config.get<number>('SMTP_PORT') || 587,
+            secure: this.config.get<number>('SMTP_PORT') === 465,
+            auth: {
+                user: this.config.get<string>('SMTP_USER'),
+                pass: this.config.get<string>('SMTP_PASS'),
+            },
+        });
+    }
 
-    // Metoda pomocnicza do wysyłki maila (Resend przez fetch)
+    // Metoda pomocnicza do wysyłki maila z raportem przez SMTP
     private async sendEmailWithAttachment(to: string, subject: string, text: string, pdfBuffer: Buffer, filename: string) {
-        const apiKey = this.config.get<string>('RESEND_API_KEY');
-        if (!apiKey) {
-            console.warn('⚠️ Brak RESEND_API_KEY. Nie wysłano maila.');
-            return;
-        }
-        const fromHeader = this.config.get<string>('MAIL_FROM') || 'onboarding@resend.dev';
-
-        // Konwersja Buffer na tablicę bajtów dla JSON
-        const contentArray = Array.from(pdfBuffer);
+        const fromHeader = this.config.get<string>('MAIL_FROM') || '"Aplikacja Czasu Pracy" <no-reply@localhost>';
 
         try {
-            const res = await fetch('https://api.resend.com/emails', {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    from: fromHeader,
-                    to,
-                    subject,
-                    text,
-                    attachments: [
-                        {
-                            filename: filename,
-                            content: contentArray,
-                        },
-                    ],
-                }),
+            const info = await this.transporter.sendMail({
+                from: fromHeader,
+                to,
+                subject,
+                text,
+                attachments: [
+                    {
+                        filename: filename,
+                        content: pdfBuffer,
+                    },
+                ],
             });
 
-            if (!res.ok) {
-                const errBody = await res.text();
-                console.error(`❌ Błąd wysyłki Resend: ${res.status} - ${errBody}`);
-            } else {
-                console.log(`✅ Mail z raportem wysłany do: ${to}`);
-            }
-        } catch (e) {
-            console.error('❌ Wyjątek przy wysyłce maila:', e);
+            console.log(`✅ Mail z raportem wysłany do: ${to}. MessageId: ${info.messageId}`);
+        } catch (error: any) {
+            console.error('❌ Wyjątek przy wysyłce maila SMTP z raportem:', error.message);
         }
     }
 
