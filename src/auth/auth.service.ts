@@ -241,14 +241,9 @@ export class AuthService {
                 return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu haseł.' };
             }
 
-            const appUrlFull = this.config.get<string>('APP_URL') || 'http://localhost:3000';
-            if (resetUrl.includes('supabase-kong:8000')) {
-                const parsedAppUrl = new URL(appUrlFull);
-                const parsedResetUrl = new URL(resetUrl);
-                parsedResetUrl.protocol = parsedAppUrl.protocol;
-                parsedResetUrl.host = parsedAppUrl.host;
-                parsedResetUrl.port = parsedAppUrl.port || '';
-                resetUrl = parsedResetUrl.toString();
+            const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+            if (supabaseUrl && resetUrl.includes('supabase-kong:8000')) {
+                resetUrl = resetUrl.replace('http://supabase-kong:8000', supabaseUrl);
             }
 
             await this.sendSmtpEmail(
@@ -300,14 +295,9 @@ export class AuthService {
 
         let confirmUrl = linkData?.properties?.action_link;
         if (confirmUrl) {
-            const appUrlFull = this.config.get<string>('APP_URL') || 'http://localhost:3000';
-            if (confirmUrl.includes('supabase-kong:8000')) {
-                const parsedAppUrl = new URL(appUrlFull);
-                const parsedConfirmUrl = new URL(confirmUrl);
-                parsedConfirmUrl.protocol = parsedAppUrl.protocol;
-                parsedConfirmUrl.host = parsedAppUrl.host;
-                parsedConfirmUrl.port = parsedAppUrl.port || '';
-                confirmUrl = parsedConfirmUrl.toString();
+            const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+            if (supabaseUrl && confirmUrl.includes('supabase-kong:8000')) {
+                confirmUrl = confirmUrl.replace('http://supabase-kong:8000', supabaseUrl);
             }
 
             await this.sendSmtpEmail(
