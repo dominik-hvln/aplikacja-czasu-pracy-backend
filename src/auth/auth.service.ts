@@ -109,11 +109,21 @@ export class AuthService {
         }
 
         const userId = linkData?.user?.id;
-        const confirmUrl = linkData?.properties?.action_link;
+        let confirmUrl = linkData?.properties?.action_link;
         if (!userId || !confirmUrl) {
             this.logger.error('Nie udało się wygenerować userId lub confirmUrl');
             await supabase.from('companies').delete().eq('id', companyData.id);
             throw new InternalServerErrorException('Nie udało się wygenerować linku aktywacyjnego.');
+        }
+
+        const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+        if (supabaseUrl && confirmUrl.includes('supabase-kong:8000')) {
+            const parsedSupabaseUrl = new URL(supabaseUrl);
+            const parsedConfirmUrl = new URL(confirmUrl);
+            parsedConfirmUrl.protocol = parsedSupabaseUrl.protocol;
+            parsedConfirmUrl.host = parsedSupabaseUrl.host;
+            parsedConfirmUrl.port = parsedSupabaseUrl.port || '';
+            confirmUrl = parsedConfirmUrl.toString();
         }
 
         const { error: profileError } = await supabaseAdmin
@@ -225,10 +235,20 @@ export class AuthService {
             });
             if (error) throw error;
 
-            const resetUrl = linkData?.properties?.action_link;
+            let resetUrl = linkData?.properties?.action_link;
             if (!resetUrl) {
                 console.warn('[forgotPassword] Brak action_link w generateLink');
                 return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu haseł.' };
+            }
+
+            const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+            if (supabaseUrl && resetUrl.includes('supabase-kong:8000')) {
+                const parsedSupabaseUrl = new URL(supabaseUrl);
+                const parsedResetUrl = new URL(resetUrl);
+                parsedResetUrl.protocol = parsedSupabaseUrl.protocol;
+                parsedResetUrl.host = parsedSupabaseUrl.host;
+                parsedResetUrl.port = parsedSupabaseUrl.port || '';
+                resetUrl = parsedResetUrl.toString();
             }
 
             await this.sendSmtpEmail(
@@ -277,8 +297,19 @@ export class AuthService {
             options: { redirectTo: `${appUrl}/auth/confirm` },
         });
         if (error) throw new InternalServerErrorException(error.message);
-        const confirmUrl = linkData?.properties?.action_link;
+
+        let confirmUrl = linkData?.properties?.action_link;
         if (confirmUrl) {
+            const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+            if (supabaseUrl && confirmUrl.includes('supabase-kong:8000')) {
+                const parsedSupabaseUrl = new URL(supabaseUrl);
+                const parsedConfirmUrl = new URL(confirmUrl);
+                parsedConfirmUrl.protocol = parsedSupabaseUrl.protocol;
+                parsedConfirmUrl.host = parsedSupabaseUrl.host;
+                parsedConfirmUrl.port = parsedSupabaseUrl.port || '';
+                confirmUrl = parsedConfirmUrl.toString();
+            }
+
             await this.sendSmtpEmail(
                 email,
                 'Potwierdź adres e-mail',
