@@ -116,13 +116,13 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się wygenerować linku aktywacyjnego.');
         }
 
-        const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-        if (supabaseUrl && confirmUrl.includes('supabase-kong:8000')) {
-            const parsedSupabaseUrl = new URL(supabaseUrl);
+        const appUrlFull = this.config.get<string>('APP_URL') || 'http://localhost:3000';
+        if (confirmUrl.includes('supabase-kong:8000')) {
+            const parsedAppUrl = new URL(appUrlFull);
             const parsedConfirmUrl = new URL(confirmUrl);
-            parsedConfirmUrl.protocol = parsedSupabaseUrl.protocol;
-            parsedConfirmUrl.host = parsedSupabaseUrl.host;
-            parsedConfirmUrl.port = parsedSupabaseUrl.port || '';
+            parsedConfirmUrl.protocol = parsedAppUrl.protocol;
+            parsedConfirmUrl.host = parsedAppUrl.host;
+            parsedConfirmUrl.port = parsedAppUrl.port || '';
             confirmUrl = parsedConfirmUrl.toString();
         }
 
@@ -241,13 +241,13 @@ export class AuthService {
                 return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu haseł.' };
             }
 
-            const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-            if (supabaseUrl && resetUrl.includes('supabase-kong:8000')) {
-                const parsedSupabaseUrl = new URL(supabaseUrl);
+            const appUrlFull = this.config.get<string>('APP_URL') || 'http://localhost:3000';
+            if (resetUrl.includes('supabase-kong:8000')) {
+                const parsedAppUrl = new URL(appUrlFull);
                 const parsedResetUrl = new URL(resetUrl);
-                parsedResetUrl.protocol = parsedSupabaseUrl.protocol;
-                parsedResetUrl.host = parsedSupabaseUrl.host;
-                parsedResetUrl.port = parsedSupabaseUrl.port || '';
+                parsedResetUrl.protocol = parsedAppUrl.protocol;
+                parsedResetUrl.host = parsedAppUrl.host;
+                parsedResetUrl.port = parsedAppUrl.port || '';
                 resetUrl = parsedResetUrl.toString();
             }
 
@@ -300,13 +300,13 @@ export class AuthService {
 
         let confirmUrl = linkData?.properties?.action_link;
         if (confirmUrl) {
-            const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-            if (supabaseUrl && confirmUrl.includes('supabase-kong:8000')) {
-                const parsedSupabaseUrl = new URL(supabaseUrl);
+            const appUrlFull = this.config.get<string>('APP_URL') || 'http://localhost:3000';
+            if (confirmUrl.includes('supabase-kong:8000')) {
+                const parsedAppUrl = new URL(appUrlFull);
                 const parsedConfirmUrl = new URL(confirmUrl);
-                parsedConfirmUrl.protocol = parsedSupabaseUrl.protocol;
-                parsedConfirmUrl.host = parsedSupabaseUrl.host;
-                parsedConfirmUrl.port = parsedSupabaseUrl.port || '';
+                parsedConfirmUrl.protocol = parsedAppUrl.protocol;
+                parsedConfirmUrl.host = parsedAppUrl.host;
+                parsedConfirmUrl.port = parsedAppUrl.port || '';
                 confirmUrl = parsedConfirmUrl.toString();
             }
 
