@@ -116,14 +116,19 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się wygenerować linku aktywacyjnego.');
         }
 
-        const appUrlFull = this.config.get<string>('APP_URL') || 'http://localhost:3000';
-        if (confirmUrl.includes('supabase-kong:8000')) {
-            const parsedAppUrl = new URL(appUrlFull);
-            const parsedConfirmUrl = new URL(confirmUrl);
-            parsedConfirmUrl.protocol = parsedAppUrl.protocol;
-            parsedConfirmUrl.host = parsedAppUrl.host;
-            parsedConfirmUrl.port = parsedAppUrl.port || '';
-            confirmUrl = parsedConfirmUrl.toString();
+        const appUrlFull = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+        try {
+            const parsedAction = new URL(confirmUrl);
+            const token = parsedAction.searchParams.get('token');
+
+            if (token) {
+                confirmUrl = `${appUrlFull}/auth/confirm?code=${token}`;
+            } else if (confirmUrl.includes('supabase-kong:8000')) {
+                const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+                if (supabaseUrl) confirmUrl = confirmUrl.replace('http://supabase-kong:8000', supabaseUrl);
+            }
+        } catch (err) {
+            console.error('Błąd parsowania confirmUrl Supabase:', err);
         }
 
         const { error: profileError } = await supabaseAdmin
@@ -241,9 +246,22 @@ export class AuthService {
                 return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu haseł.' };
             }
 
-            const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-            if (supabaseUrl && resetUrl.includes('supabase-kong:8000')) {
-                resetUrl = resetUrl.replace('http://supabase-kong:8000', supabaseUrl);
+            // Wydobywamy sam token z oryginalnego urla Supabase
+            // action_link wygląda np: http://supabase-kong:8000/auth/v1/verify?token=XYZ&type=recovery&redirect_to=...
+            const appUrlFull = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+            try {
+                const parsedAction = new URL(resetUrl);
+                const token = parsedAction.searchParams.get('token');
+
+                if (token) {
+                    // Budujemy bezpośredni link na nasz frontend dla strony resetowania hasła (z hashem wg wymagań strony auth/reset ui)
+                    resetUrl = `${appUrlFull}/auth/reset#access_token=${token}`;
+                } else if (resetUrl.includes('supabase-kong:8000')) {
+                    const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+                    if (supabaseUrl) resetUrl = resetUrl.replace('http://supabase-kong:8000', supabaseUrl);
+                }
+            } catch (err) {
+                console.error('Błąd parsowania resetUrl Supabase:', err);
             }
 
             await this.sendSmtpEmail(
@@ -295,9 +313,19 @@ export class AuthService {
 
         let confirmUrl = linkData?.properties?.action_link;
         if (confirmUrl) {
-            const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-            if (supabaseUrl && confirmUrl.includes('supabase-kong:8000')) {
-                confirmUrl = confirmUrl.replace('http://supabase-kong:8000', supabaseUrl);
+            const appUrlFull = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+            try {
+                const parsedAction = new URL(confirmUrl);
+                const token = parsedAction.searchParams.get('token');
+
+                if (token) {
+                    confirmUrl = `${appUrlFull}/auth/confirm?code=${token}`;
+                } else if (confirmUrl.includes('supabase-kong:8000')) {
+                    const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+                    if (supabaseUrl) confirmUrl = confirmUrl.replace('http://supabase-kong:8000', supabaseUrl);
+                }
+            } catch (err) {
+                console.error('Błąd parsowania confirmUrl Supabase:', err);
             }
 
             await this.sendSmtpEmail(
