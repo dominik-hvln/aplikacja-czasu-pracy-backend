@@ -5,6 +5,7 @@ import {
     UnauthorizedException,
     Logger,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { SupabaseService } from '../supabase/supabase.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -116,18 +117,11 @@ export class AuthService {
             throw new InternalServerErrorException('Nie udało się wygenerować linku aktywacyjnego.');
         }
 
-        const appUrlFull = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+        const backendUrl = this.config.get<string>('BACKEND_URL')?.replace(/\/+$/, '') || 'http://localhost:4000';
         try {
             const parsedAction = new URL(confirmUrl);
-            const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-            if (supabaseUrl) {
-                const parsedSupabase = new URL(supabaseUrl);
-                parsedAction.protocol = parsedSupabase.protocol;
-                parsedAction.host = parsedSupabase.host;
-                parsedAction.port = parsedSupabase.port || '';
-            }
-            parsedAction.searchParams.set('redirect_to', `${appUrlFull}/auth/confirm`);
-            confirmUrl = parsedAction.toString();
+            const token = parsedAction.searchParams.get('token');
+            if (token) confirmUrl = `${backendUrl}/auth/verify?token=${token}&type=signup`;
         } catch (err) {
             console.error('Błąd parsowania confirmUrl Supabase:', err);
         }
@@ -247,18 +241,11 @@ export class AuthService {
                 return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu haseł.' };
             }
 
-            const appUrlFull = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+            const backendUrl = this.config.get<string>('BACKEND_URL')?.replace(/\/+$/, '') || 'http://localhost:4000';
             try {
                 const parsedAction = new URL(resetUrl);
-                const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-                if (supabaseUrl) {
-                    const parsedSupabase = new URL(supabaseUrl);
-                    parsedAction.protocol = parsedSupabase.protocol;
-                    parsedAction.host = parsedSupabase.host;
-                    parsedAction.port = parsedSupabase.port || '';
-                }
-                parsedAction.searchParams.set('redirect_to', `${appUrlFull}/auth/reset`);
-                resetUrl = parsedAction.toString();
+                const token = parsedAction.searchParams.get('token');
+                if (token) resetUrl = `${backendUrl}/auth/verify?token=${token}&type=recovery`;
             } catch (err) {
                 console.error('Błąd parsowania resetUrl Supabase:', err);
             }
@@ -312,18 +299,11 @@ export class AuthService {
 
         let confirmUrl = linkData?.properties?.action_link;
         if (confirmUrl) {
-            const appUrlFull = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+            const backendUrl = this.config.get<string>('BACKEND_URL')?.replace(/\/+$/, '') || 'http://localhost:4000';
             try {
                 const parsedAction = new URL(confirmUrl);
-                const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-                if (supabaseUrl) {
-                    const parsedSupabase = new URL(supabaseUrl);
-                    parsedAction.protocol = parsedSupabase.protocol;
-                    parsedAction.host = parsedSupabase.host;
-                    parsedAction.port = parsedSupabase.port || '';
-                }
-                parsedAction.searchParams.set('redirect_to', `${appUrlFull}/auth/confirm`);
-                confirmUrl = parsedAction.toString();
+                const token = parsedAction.searchParams.get('token');
+                if (token) confirmUrl = `${backendUrl}/auth/verify?token=${token}&type=magiclink`;
             } catch (err) {
                 console.error('Błąd parsowania confirmUrl Supabase:', err);
             }
@@ -336,5 +316,28 @@ export class AuthService {
             );
         }
         return { message: 'Jeśli konto istnieje, wysłaliśmy nowy link.' };
+    }
+
+    async verifyEmailToken(token: string, type: string, res: Response) {
+        const supabase = this.supabaseService.getClient();
+        const appUrlFull = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+
+        // type musi być zmapowany m.in. na EmailOtpType z Supabase
+        const { data, error } = await supabase.auth.verifyOtp({
+            token_hash: token,
+            type: type as any, // 'recovery', 'signup', 'magiclink'
+        });
+
+        if (error) {
+            this.logger.error(`Błąd weryfikacji OTP: ${error.message}`);
+            return res.redirect(`${appUrlFull}/auth/confirm?error_description=${encodeURIComponent(error.message)}`);
+        }
+
+        if (type === 'recovery') {
+            const accessToken = data.session?.access_token || '';
+            return res.redirect(`${appUrlFull}/auth/reset#access_token=${accessToken}`);
+        }
+
+        return res.redirect(`${appUrlFull}/auth/confirm?code=${token}`);
     }
 }

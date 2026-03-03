@@ -1,4 +1,5 @@
-import { Controller, Post, Body, Get, UseGuards, Req, Query, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Body, Get, UseGuards, Req, Query, BadRequestException, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -39,5 +40,15 @@ export class AuthController {
     @Post('password/reset')
     reset(@Body() dto: ResetPasswordDto) {
         return this.authService.resetPassword(dto);
+    }
+
+    @Get('verify')
+    async verify(
+        @Query('token') token: string,
+        @Query('type') type: string,
+        @Res() res: Response
+    ) {
+        if (!token) throw new BadRequestException('Brak tokenu aktywacyjnego.');
+        return this.authService.verifyEmailToken(token, type, res);
     }
 }
