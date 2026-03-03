@@ -119,14 +119,15 @@ export class AuthService {
         const appUrlFull = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
         try {
             const parsedAction = new URL(confirmUrl);
-            const token = parsedAction.searchParams.get('token');
-
-            if (token) {
-                confirmUrl = `${appUrlFull}/auth/confirm?code=${token}`;
-            } else if (confirmUrl.includes('supabase-kong:8000')) {
-                const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-                if (supabaseUrl) confirmUrl = confirmUrl.replace('http://supabase-kong:8000', supabaseUrl);
+            const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+            if (supabaseUrl) {
+                const parsedSupabase = new URL(supabaseUrl);
+                parsedAction.protocol = parsedSupabase.protocol;
+                parsedAction.host = parsedSupabase.host;
+                parsedAction.port = parsedSupabase.port || '';
             }
+            parsedAction.searchParams.set('redirect_to', `${appUrlFull}/auth/confirm`);
+            confirmUrl = parsedAction.toString();
         } catch (err) {
             console.error('Błąd parsowania confirmUrl Supabase:', err);
         }
@@ -246,20 +247,18 @@ export class AuthService {
                 return { message: 'Jeśli konto istnieje, wysłaliśmy instrukcje resetu haseł.' };
             }
 
-            // Wydobywamy sam token z oryginalnego urla Supabase
-            // action_link wygląda np: http://supabase-kong:8000/auth/v1/verify?token=XYZ&type=recovery&redirect_to=...
             const appUrlFull = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
             try {
                 const parsedAction = new URL(resetUrl);
-                const token = parsedAction.searchParams.get('token');
-
-                if (token) {
-                    // Budujemy bezpośredni link na nasz frontend dla strony resetowania hasła (z hashem wg wymagań strony auth/reset ui)
-                    resetUrl = `${appUrlFull}/auth/reset#access_token=${token}`;
-                } else if (resetUrl.includes('supabase-kong:8000')) {
-                    const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-                    if (supabaseUrl) resetUrl = resetUrl.replace('http://supabase-kong:8000', supabaseUrl);
+                const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+                if (supabaseUrl) {
+                    const parsedSupabase = new URL(supabaseUrl);
+                    parsedAction.protocol = parsedSupabase.protocol;
+                    parsedAction.host = parsedSupabase.host;
+                    parsedAction.port = parsedSupabase.port || '';
                 }
+                parsedAction.searchParams.set('redirect_to', `${appUrlFull}/auth/reset`);
+                resetUrl = parsedAction.toString();
             } catch (err) {
                 console.error('Błąd parsowania resetUrl Supabase:', err);
             }
@@ -316,14 +315,15 @@ export class AuthService {
             const appUrlFull = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
             try {
                 const parsedAction = new URL(confirmUrl);
-                const token = parsedAction.searchParams.get('token');
-
-                if (token) {
-                    confirmUrl = `${appUrlFull}/auth/confirm?code=${token}`;
-                } else if (confirmUrl.includes('supabase-kong:8000')) {
-                    const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-                    if (supabaseUrl) confirmUrl = confirmUrl.replace('http://supabase-kong:8000', supabaseUrl);
+                const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+                if (supabaseUrl) {
+                    const parsedSupabase = new URL(supabaseUrl);
+                    parsedAction.protocol = parsedSupabase.protocol;
+                    parsedAction.host = parsedSupabase.host;
+                    parsedAction.port = parsedSupabase.port || '';
                 }
+                parsedAction.searchParams.set('redirect_to', `${appUrlFull}/auth/confirm`);
+                confirmUrl = parsedAction.toString();
             } catch (err) {
                 console.error('Błąd parsowania confirmUrl Supabase:', err);
             }
