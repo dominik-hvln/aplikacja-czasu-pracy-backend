@@ -8,33 +8,48 @@ import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class ReportsService {
-    private transporter: nodemailer.Transporter;
+    private transporter: nodemailer.Transporter | null = null;
 
     constructor(
         private readonly supabaseService: SupabaseService,
         private readonly pdfService: PdfService,
         private readonly config: ConfigService,
-    ) {
-        const smtpUser = this.config.get<string>('SMTP_USER')?.trim();
-        const smtpPass = this.config.get<string>('SMTP_PASS')?.trim();
+    ) { }
 
-        this.transporter = nodemailer.createTransport({
-            host: this.config.get<string>('SMTP_HOST'),
-            port: Number(this.config.get('SMTP_PORT')) || 587,
-            secure: Number(this.config.get('SMTP_PORT')) === 465 || this.config.get<string>('SMTP_SECURE') === 'true',
-            auth: {
-                user: smtpUser,
-                pass: smtpPass,
-            },
-        });
+    private getTransporter() {
+        if (!this.transporter) {
+            const smtpUser = this.config.get<string>('SMTP_USER')?.trim();
+            const smtpPass = this.config.get<string>('SMTP_PASS')?.trim();
+            const smtpHost = this.config.get<string>('SMTP_HOST')?.trim() || '';
+            const smtpPort = Number(this.config.get('SMTP_PORT')) || 587;
+            const secure = smtpPort === 465 || this.config.get<string>('SMTP_SECURE')?.trim() === 'true';
+
+            if (!smtpUser || !smtpPass) {
+                console.error(`[Reports] Brak danych logowania SMTP! USER: ${smtpUser ? 'OK' : 'BRAK'}, PASS: ${smtpPass ? 'OK' : 'BRAK'}`);
+            }
+
+            console.log(`[Reports] Inicjalizacja SMTP: Host=${smtpHost}, Port=${smtpPort}, Secure=${secure}, User=${smtpUser}`);
+
+            this.transporter = nodemailer.createTransport({
+                host: smtpHost,
+                port: smtpPort,
+                secure: secure,
+                auth: {
+                    user: smtpUser,
+                    pass: smtpPass,
+                },
+            });
+        }
+        return this.transporter;
     }
 
     // Metoda pomocnicza do wysyłki maila z raportem przez SMTP
     private async sendEmailWithAttachment(to: string, subject: string, text: string, pdfBuffer: Buffer, filename: string) {
         const fromHeader = this.config.get<string>('MAIL_FROM') || '"Aplikacja Czasu Pracy" <no-reply@localhost>';
+        const mailTransporter = this.getTransporter();
 
         try {
-            const info = await this.transporter.sendMail({
+            const info = await mailTransporter.sendMail({
                 from: fromHeader,
                 to,
                 subject,
