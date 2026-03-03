@@ -24,13 +24,20 @@ export class AuthService {
         private readonly jwtService: JwtService,
         private readonly config: ConfigService,
     ) {
+        const smtpUser = this.config.get<string>('SMTP_USER')?.trim();
+        const smtpPass = this.config.get<string>('SMTP_PASS')?.trim();
+
+        if (!smtpUser || !smtpPass) {
+            this.logger.error(`Brak danych logowania SMTP! USER: ${smtpUser ? 'OK' : 'BRAK'}, PASS: ${smtpPass ? 'OK' : 'BRAK'}`);
+        }
+
         this.transporter = nodemailer.createTransport({
             host: this.config.get<string>('SMTP_HOST'),
             port: Number(this.config.get('SMTP_PORT')) || 587,
             secure: Number(this.config.get('SMTP_PORT')) === 465 || this.config.get<string>('SMTP_SECURE') === 'true',
             auth: {
-                user: this.config.get<string>('SMTP_USER'),
-                pass: this.config.get<string>('SMTP_PASS'),
+                user: smtpUser,
+                pass: smtpPass,
             },
         });
     }

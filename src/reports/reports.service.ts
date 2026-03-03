@@ -15,13 +15,16 @@ export class ReportsService {
         private readonly pdfService: PdfService,
         private readonly config: ConfigService,
     ) {
+        const smtpUser = this.config.get<string>('SMTP_USER')?.trim();
+        const smtpPass = this.config.get<string>('SMTP_PASS')?.trim();
+
         this.transporter = nodemailer.createTransport({
             host: this.config.get<string>('SMTP_HOST'),
             port: Number(this.config.get('SMTP_PORT')) || 587,
             secure: Number(this.config.get('SMTP_PORT')) === 465 || this.config.get<string>('SMTP_SECURE') === 'true',
             auth: {
-                user: this.config.get<string>('SMTP_USER'),
-                pass: this.config.get<string>('SMTP_PASS'),
+                user: smtpUser,
+                pass: smtpPass,
             },
         });
     }
