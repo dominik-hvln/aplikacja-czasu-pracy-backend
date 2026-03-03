@@ -17,8 +17,8 @@ export class ReportsService {
     ) {
         this.transporter = nodemailer.createTransport({
             host: this.config.get<string>('SMTP_HOST'),
-            port: this.config.get<number>('SMTP_PORT') || 587,
-            secure: this.config.get<number>('SMTP_PORT') === 465,
+            port: Number(this.config.get('SMTP_PORT')) || 587,
+            secure: Number(this.config.get('SMTP_PORT')) === 465 || this.config.get<string>('SMTP_SECURE') === 'true',
             auth: {
                 user: this.config.get<string>('SMTP_USER'),
                 pass: this.config.get<string>('SMTP_PASS'),
