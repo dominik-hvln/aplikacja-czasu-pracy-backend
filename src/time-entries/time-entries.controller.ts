@@ -18,7 +18,7 @@ export class TimeEntriesController {
     }
 
     @Get()
-    @Roles(Role.Admin, Role.Manager)
+    @Roles(Role.Admin, Role.Manager, Role.Employee)
     findAll(
         @Req() req,
         @Query('dateFrom') dateFrom?: string,
@@ -26,6 +26,12 @@ export class TimeEntriesController {
         @Query('userId') userId?: string,
     ) {
         const companyId = req.user.company_id;
+        
+        // Ensure employees can only see their own entries
+        if (req.user.role === Role.Employee) {
+            userId = req.user.id;
+        }
+
         return this.timeEntriesService.findAllForCompany(companyId, {
             dateFrom,
             dateTo,
