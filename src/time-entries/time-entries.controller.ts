@@ -67,7 +67,7 @@ export class TimeEntriesController {
     }
 
     @Post('switch-task')
-    @Roles(Role.Employee)
+    @Roles(Role.Employee, Role.Admin, Role.Manager)
     switchTask(@Body() switchTaskDto: SwitchTaskDto, @Req() req) {
         const { id: userId, company_id: companyId } = req.user;
         return this.timeEntriesService.switchTask(userId, companyId, switchTaskDto.taskId, switchTaskDto.location);
