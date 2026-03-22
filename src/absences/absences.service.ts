@@ -34,8 +34,8 @@ export class AbsencesService {
             .from('absences')
             .select(`
                 *,
-                user:users!user_id ( id, first_name, last_name, role, manager_id ),
-                reviewer:users!reviewed_by ( id, first_name, last_name )
+                user:users!absences_user_id_fkey ( id, first_name, last_name, role, manager_id ),
+                reviewer:users!absences_reviewed_by_fkey ( id, first_name, last_name )
             `)
             .eq('company_id', user.companyId)
             .order('start_date', { ascending: false });
@@ -71,7 +71,7 @@ export class AbsencesService {
         // Sprawdź czy użytkownik ma uprawnienia (np. czy to jego pracownik, jeśli jest managerem)
         const { data: absence, error: fetchError } = await supabase
             .from('absences')
-            .select('*, user:users!user_id(manager_id)')
+            .select('*, user:users!absences_user_id_fkey(manager_id)')
             .eq('id', id)
             .eq('company_id', user.companyId)
             .single();
