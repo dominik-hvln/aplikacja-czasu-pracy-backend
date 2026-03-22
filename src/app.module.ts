@@ -18,6 +18,7 @@ import { ReportsModule } from "./reports/reports.module";
 import { SubscriptionModule } from './subscription/subscription.module';
 import { StripeModule } from './stripe/stripe.module';
 import { CompanySettingsModule } from './company-settings/company-settings.module';
+import { AbsencesModule } from './absences/absences.module';
 
 @Module({
     imports: [
@@ -39,6 +40,7 @@ import { CompanySettingsModule } from './company-settings/company-settings.modul
         SubscriptionModule,
         StripeModule,
         CompanySettingsModule,
+        AbsencesModule,
     ],
     controllers: [AppController],
     providers: [AppService],
