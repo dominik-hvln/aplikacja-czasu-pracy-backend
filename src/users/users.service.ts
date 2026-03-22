@@ -106,7 +106,6 @@ export class UsersService {
         if (updateUserDto.fteId !== undefined) updateData.fte_id = updateUserDto.fteId;
         if (updateUserDto.managerId !== undefined) updateData.manager_id = updateUserDto.managerId;
         if (updateUserDto.employmentDate !== undefined) updateData.employment_date = updateUserDto.employmentDate;
-        if (updateUserDto.hourlyRate !== undefined) updateData.hourlyRate = updateUserDto.hourlyRate; // wait! oops
         if (updateUserDto.contractEndDate !== undefined) updateData.contract_end_date = updateUserDto.contractEndDate;
         if (updateUserDto.vacationDaysQuota !== undefined) updateData.vacation_days_quota = updateUserDto.vacationDaysQuota;
         if (updateUserDto.phoneNumber !== undefined) updateData.phone_number = updateUserDto.phoneNumber;
