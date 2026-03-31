@@ -80,7 +80,7 @@ export class SchedulesService {
             .from('users')
             .select('id, role')
             .eq('company_id', companyId)
-            .eq('role', 'user'); // usually only standard users get schedules, but you could adjust.
+            .eq('role', 'employee'); // only employee roles get schedules generated
 
         if (usersErr) throw new InternalServerErrorException(usersErr.message);
         
