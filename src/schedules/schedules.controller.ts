@@ -59,6 +59,24 @@ export class SchedulesController {
         return this.schedulesService.deleteSchedule(id, req.user.company_id);
     }
 
+    // --- Holidays ---
+    @Get('holidays')
+    getHolidays(@Req() req, @Query('departmentId') departmentId: string, @Query('month') month: number, @Query('year') year: number) {
+        return this.schedulesService.getMergedHolidays(req.user.company_id, departmentId, year, month);
+    }
+
+    @Post('company-holidays')
+    @Roles(Role.Admin, Role.Manager)
+    createCompanyHoliday(@Req() req, @Body() payload: { department_id?: string, date: string, name: string }) {
+        return this.schedulesService.createCompanyHoliday(req.user.company_id, payload);
+    }
+
+    @Delete('company-holidays/:id')
+    @Roles(Role.Admin, Role.Manager)
+    deleteCompanyHoliday(@Req() req, @Param('id') id: string) {
+        return this.schedulesService.deleteCompanyHoliday(req.user.company_id, id);
+    }
+
     // --- Shift Requests ---
     @Post('requests')
     createShiftRequest(@Req() req, @Body() createDto: CreateShiftRequestDto) {

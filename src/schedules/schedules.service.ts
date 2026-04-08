@@ -1,11 +1,15 @@
 import { Injectable, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { HolidaysService } from './holidays.service';
 import { GenerateScheduleDto, UpdateScheduleDto, UpdateSettingsDto, CreateShiftRequestDto, UpdateShiftRequestStatusDto, CreateScheduleDto } from './dto/schedule.dtos';
 import { startOfMonth, endOfMonth, eachDayOfInterval, getDay, format, parseISO, subWeeks, subDays, isBefore, isAfter, parse } from 'date-fns';
 
 @Injectable()
 export class SchedulesService {
-    constructor(private readonly supabaseService: SupabaseService) {}
+    constructor(
+        private readonly supabaseService: SupabaseService,
+        private readonly holidaysService: HolidaysService
+    ) {}
 
     // --- Settings ---
     async getSettings(companyId: string, departmentId: string) {
@@ -90,6 +94,47 @@ export class SchedulesService {
         return { success: true };
     }
 
+    // --- Holidays ---
+    async getMergedHolidays(companyId: string, departmentId: string, year: number, month: number) {
+        const publicHolidays = this.holidaysService.getPolishPublicHolidaysForMonth(year, month).map(h => ({
+            ...h,
+            is_company_holiday: false
+        }));
+
+        const startDate = new Date(year, month - 1, 1);
+        const endDate = endOfMonth(startDate);
+        const startStr = format(startDate, 'yyyy-MM-dd');
+        const endStr = format(endDate, 'yyyy-MM-dd');
+
+        const supabase = this.supabaseService.getClient();
+        let query = supabase
+            .from('company_holidays')
+            .select('*')
+            .eq('company_id', companyId)
+            .gte('date', startStr)
+            .lte('date', endStr);
+            
+        if (departmentId) {
+            query = query.or(`department_id.eq.${departmentId},department_id.is.null`);
+        } else {
+            query = query.is('department_id', null);
+        }
+
+        const { data: compHolidays, error } = await query;
+
+        if (error) throw new InternalServerErrorException(error.message);
+
+        const customHolidays = (compHolidays || []).map(h => ({
+            id: h.id,
+            date: h.date,
+            name: h.name,
+            is_company_holiday: h.department_id ? 'department' : 'company',
+            department_id: h.department_id
+        }));
+
+        return [...publicHolidays, ...customHolidays];
+    }
+
     async generateSchedule(companyId: string, departmentId: string, month: number, year: number) {
         const supabase = this.supabaseService.getClient();
         const settings = await this.getSettings(companyId, departmentId);
@@ -156,6 +201,9 @@ export class SchedulesService {
         // Logic for rotating shifts per department
         const days = eachDayOfInterval({ start: startDate, end: endDate });
         const newSchedules: any[] = [];
+        
+        // Load holidays
+        const mergedHolidays = await this.getMergedHolidays(companyId, departmentId, year, month);
 
         // Divide employees into groups based on max shifts available in the week to balance them
         // First gather all unique shifts in the settings
@@ -224,6 +272,13 @@ export class SchedulesService {
                      dateStr >= a.start_date && dateStr <= a.end_date
                  );
 
+                 // Check for holidays
+                 const isHoliday = mergedHolidays.find(h => h.date === dateStr);
+                 if (isHoliday) {
+                     // Optionally record as holiday or skip. Here we skip schedule assignment to give free day.
+                     continue; 
+                 }
+
                  newSchedules.push({
                      company_id: companyId,
                      user_id: user.id,
@@ -284,6 +339,26 @@ export class SchedulesService {
             .eq('id', id)
             .eq('company_id', companyId);
 
+        if (error) throw new InternalServerErrorException(error.message);
+        return { success: true };
+    }
+
+    // --- Company Holidays CRUD ---
+    async createCompanyHoliday(companyId: string, payload: { department_id?: string, date: string, name: string }) {
+        const supabase = this.supabaseService.getClient();
+        const { error } = await supabase.from('company_holidays').insert({
+            company_id: companyId,
+            department_id: payload.department_id || null,
+            date: payload.date,
+            name: payload.name
+        });
+        if (error) throw new InternalServerErrorException(error.message);
+        return { success: true };
+    }
+
+    async deleteCompanyHoliday(companyId: string, id: string) {
+        const supabase = this.supabaseService.getClient();
+        const { error } = await supabase.from('company_holidays').delete().eq('id', id).eq('company_id', companyId);
         if (error) throw new InternalServerErrorException(error.message);
         return { success: true };
     }
