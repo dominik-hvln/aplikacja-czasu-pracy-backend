@@ -20,6 +20,7 @@ import { StripeModule } from './stripe/stripe.module';
 import { CompanySettingsModule } from './company-settings/company-settings.module';
 import { AbsencesModule } from './absences/absences.module';
 import { SchedulesModule } from './schedules/schedules.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
     imports: [
@@ -43,6 +44,7 @@ import { SchedulesModule } from './schedules/schedules.module';
         CompanySettingsModule,
         AbsencesModule,
         SchedulesModule,
+        NotificationsModule,
     ],
     controllers: [AppController],
     providers: [AppService],

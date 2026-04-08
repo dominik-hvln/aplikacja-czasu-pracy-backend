@@ -64,6 +64,10 @@ export class GenerateScheduleDto {
     @IsInt()
     @Min(2020)
     year: number;
+
+    @IsString()
+    @IsNotEmpty()
+    department_id: string;
 }
 
 export class UpdateScheduleDto {
@@ -90,11 +94,40 @@ export class UpdateScheduleDto {
 
 export class CreateShiftRequestDto {
     @IsDateString()
-    date: string;
+    start_date: string;
+
+    @IsDateString()
+    @IsOptional()
+    end_date?: string;
 
     @IsString()
     @IsNotEmpty()
     requested_shift_name: string;
+}
+
+export class CreateScheduleDto {
+    @IsString()
+    @IsNotEmpty()
+    user_id: string;
+
+    @IsDateString()
+    date: string;
+
+    @IsString()
+    @IsNotEmpty()
+    shift_name: string;
+
+    @IsString()
+    @IsNotEmpty()
+    start_time: string;
+
+    @IsString()
+    @IsNotEmpty()
+    end_time: string;
+
+    @IsString()
+    @IsOptional()
+    status?: string;
 }
 
 export class UpdateShiftRequestStatusDto {

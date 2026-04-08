@@ -1,23 +1,20 @@
 import { Injectable, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { GenerateScheduleDto, UpdateScheduleDto, UpdateSettingsDto, CreateShiftRequestDto, UpdateShiftRequestStatusDto } from './dto/schedule.dtos';
-import { startOfMonth, endOfMonth, eachDayOfInterval, getDay, format, parseISO, subWeeks, subDays } from 'date-fns';
+import { GenerateScheduleDto, UpdateScheduleDto, UpdateSettingsDto, CreateShiftRequestDto, UpdateShiftRequestStatusDto, CreateScheduleDto } from './dto/schedule.dtos';
+import { startOfMonth, endOfMonth, eachDayOfInterval, getDay, format, parseISO, subWeeks, subDays, isBefore, isAfter, parse } from 'date-fns';
 
 @Injectable()
 export class SchedulesService {
     constructor(private readonly supabaseService: SupabaseService) {}
 
     // --- Settings ---
-    async getSettings(companyId: string) {
+    async getSettings(companyId: string, departmentId: string) {
         const supabase = this.supabaseService.getClient();
-        const { data, error } = await supabase
-            .from('companies')
-            .select('schedule_settings')
-            .eq('id', companyId)
-            .single();
-
-        if (error) throw new InternalServerErrorException(error.message);
         
+        let query = supabase.from('departments').select('schedule_settings').eq('id', departmentId).eq('company_id', companyId).single();
+        const { data, error } = await query;
+
+        // Optionally fallback to company settings if not found, but we will return default if not exist
         return data?.schedule_settings || {
             "1": { "is_working_day": true, "shifts": [] },
             "2": { "is_working_day": true, "shifts": [] },
@@ -29,27 +26,31 @@ export class SchedulesService {
         };
     }
 
-    async updateSettings(companyId: string, settings: UpdateSettingsDto) {
+    async updateSettings(companyId: string, departmentId: string, settings: UpdateSettingsDto) {
         const supabase = this.supabaseService.getClient();
         const { error } = await supabase
-            .from('companies')
+            .from('departments')
             .update({ schedule_settings: settings })
-            .eq('id', companyId);
+            .eq('id', departmentId)
+            .eq('company_id', companyId);
 
         if (error) throw new InternalServerErrorException(error.message);
         return { success: true };
     }
 
     // --- Schedules ---
-    async getSchedules(context: { userId: string, role: string, companyId: string }, month?: number, year?: number) {
+    async getSchedules(context: { userId: string, role: string, companyId: string }, month?: number, year?: number, departmentId?: string) {
         const supabase = this.supabaseService.getClient();
+        
+        let selectQuery = `*, users!inner(id, first_name, last_name, email, department_id)`;
         let query = supabase
             .from('schedules')
-            .select(`
-                *,
-                users!user_id (id, first_name, last_name, email)
-            `)
+            .select(selectQuery)
             .eq('company_id', context.companyId);
+
+        if (departmentId) {
+            query = query.eq('users.department_id', departmentId);
+        }
 
         if (month && year) {
             const startDate = new Date(year, month - 1, 1);
@@ -71,21 +72,40 @@ export class SchedulesService {
         return data;
     }
 
-    async generateSchedule(companyId: string, month: number, year: number) {
+    async createSchedule(companyId: string, createDto: CreateScheduleDto) {
         const supabase = this.supabaseService.getClient();
-        const settings = await this.getSettings(companyId);
+        const { error } = await supabase
+            .from('schedules')
+            .upsert({
+                company_id: companyId,
+                user_id: createDto.user_id,
+                date: createDto.date,
+                shift_name: createDto.shift_name,
+                start_time: createDto.start_time,
+                end_time: createDto.end_time,
+                status: createDto.status || 'scheduled'
+            }, { onConflict: 'user_id,date' });
 
-        // Fetch all active users in the company
+        if (error) throw new InternalServerErrorException(error.message);
+        return { success: true };
+    }
+
+    async generateSchedule(companyId: string, departmentId: string, month: number, year: number) {
+        const supabase = this.supabaseService.getClient();
+        const settings = await this.getSettings(companyId, departmentId);
+
+        // Fetch all active users in the company for this department
         const { data: users, error: usersErr } = await supabase
             .from('users')
             .select('id, role')
             .eq('company_id', companyId)
+            .eq('department_id', departmentId)
             .eq('role', 'employee'); // only employee roles get schedules generated
 
         if (usersErr) throw new InternalServerErrorException(usersErr.message);
         
         if (!users || users.length === 0) {
-            throw new BadRequestException('Brak pracownikow do wygenerowania grafiku.');
+            throw new BadRequestException('Brak pracownikow w tym dziale do wygenerowania grafiku.');
         }
 
         // Fetch approved absences for the period
@@ -106,13 +126,14 @@ export class SchedulesService {
         if (absErr) throw new InternalServerErrorException(absErr.message);
 
         // Fetch approved shift requests
+        // Since shift_requests now have start_date and optionally end_date, overlap check is needed
         const { data: requests, error: reqErr } = await supabase
             .from('shift_requests')
             .select('*')
             .eq('company_id', companyId)
             .eq('status', 'approved')
-            .gte('date', startStr)
-            .lte('date', endStr);
+            .lte('start_date', endStr)
+            .gte('start_date', startStr); // basic overlap, we will check precisely in loop
             
         if (reqErr) throw new InternalServerErrorException(reqErr.message);
 
@@ -132,11 +153,29 @@ export class SchedulesService {
             }
         }
 
-        // Logic for rotating shifts
+        // Logic for rotating shifts per department
         const days = eachDayOfInterval({ start: startDate, end: endDate });
         const newSchedules: any[] = [];
 
+        // Divide employees into groups based on max shifts available in the week to balance them
+        // First gather all unique shifts in the settings
+        const allShiftNames = new Set<string>();
+        Object.values(settings).forEach((daySettings: any) => {
+            if (daySettings.is_working_day && daySettings.shifts) {
+                daySettings.shifts.forEach((s: any) => allShiftNames.add(s.name));
+            }
+        });
+        const shiftNamesArray = Array.from(allShiftNames);
+        const totalShiftsCount = Math.max(1, shiftNamesArray.length);
+
+        // Assign users to initial group indices
+        const userGroupIndices: Record<string, number> = {};
+        users.forEach((user, idx) => {
+            userGroupIndices[user.id] = idx % totalShiftsCount;
+        });
+
         for (const user of users) {
+             let currentGroupIdx = userGroupIndices[user.id];
              let currentUserShiftForWeek = lastShiftPerUser[user.id] || null;
 
              for (const day of days) {
@@ -149,28 +188,35 @@ export class SchedulesService {
                      continue; // Not a working day, skip
                  }
 
-                 // If Monday (dow = 1) or first day of month -> pick a shift for the week
+                 // Group rotation on Monday
+                 if (dow === 1 && day.getDate() !== 1) {
+                     currentGroupIdx = (currentGroupIdx + 1) % Math.max(1, dailySettings.shifts.length);
+                 }
+
+                 const shiftNames = dailySettings.shifts.map((s: any) => s.name);
+                 
+                 // If Monday or first day of month -> pick a shift for the week
                  if (dow === 1 || day.getDate() === 1 || !currentUserShiftForWeek) {
-                     // Check if there is an approved request for this day (assuming requests are per day or per week)
-                     const userReq = requests?.find(r => r.user_id === user.id && r.date === dateStr);
-                     if (userReq) {
-                         currentUserShiftForWeek = userReq.requested_shift_name;
-                     } else {
-                         // Rotate: find index of last shift, pick next one
-                         const shiftNames = dailySettings.shifts.map(s => s.name);
-                         if (currentUserShiftForWeek && shiftNames.includes(currentUserShiftForWeek)) {
-                             const idx = shiftNames.indexOf(currentUserShiftForWeek);
-                             const nextIdx = (idx + 1) % shiftNames.length;
-                             currentUserShiftForWeek = shiftNames[nextIdx];
-                         } else {
-                             // Random start or first shift
-                             currentUserShiftForWeek = shiftNames[0];
-                         }
+                     // Rotate by group index
+                     if (shiftNames.length > 0) {
+                        currentUserShiftForWeek = shiftNames[currentGroupIdx % shiftNames.length];
                      }
                  }
 
+                 // Check if there is an approved request for this day (overlap check)
+                 const userReq = requests?.find(r => {
+                     if (r.user_id !== user.id) return false;
+                     if (!r.end_date) return r.start_date === dateStr;
+                     return dateStr >= r.start_date && dateStr <= r.end_date;
+                 });
+                 
+                 let finalShiftName = currentUserShiftForWeek;
+                 if (userReq && shiftNames.includes(userReq.requested_shift_name)) {
+                     finalShiftName = userReq.requested_shift_name;
+                 }
+
                  // Find shift details
-                 const targetShift = dailySettings.shifts.find(s => s.name === currentUserShiftForWeek) || dailySettings.shifts[0];
+                 const targetShift = dailySettings.shifts.find((s: any) => s.name === finalShiftName) || dailySettings.shifts[0];
                  
                  // Check if user is absent
                  const userAbsent = absences?.find(a => 
@@ -250,7 +296,8 @@ export class SchedulesService {
             .insert({
                 company_id: companyId,
                 user_id: userId,
-                date: payload.date,
+                start_date: payload.start_date,
+                end_date: payload.end_date,
                 requested_shift_name: payload.requested_shift_name,
                 status: 'pending'
             });
@@ -277,13 +324,78 @@ export class SchedulesService {
 
     async updateShiftRequestStatus(id: string, companyId: string, status: 'approved' | 'rejected') {
         const supabase = this.supabaseService.getClient();
-        const { error } = await supabase
+        
+        // 1. Update status
+        const { error, data: reqData } = await supabase
             .from('shift_requests')
             .update({ status })
             .eq('id', id)
-            .eq('company_id', companyId);
+            .eq('company_id', companyId)
+            .select('*')
+            .single();
 
-        if (error) throw new InternalServerErrorException(error.message);
+        if (error || !reqData) throw new InternalServerErrorException(error?.message || 'Brak zgłoszenia');
+
+        // 2. If approved, Auto-apply to schedules
+        if (status === 'approved') {
+            const startDate = parseISO(reqData.start_date);
+            const endDate = reqData.end_date ? parseISO(reqData.end_date) : startDate;
+            
+            // Check absences first
+            const { data: absences } = await supabase
+                .from('absences')
+                .select('*')
+                .eq('user_id', reqData.user_id)
+                .eq('status', 'approved')
+                .lte('start_date', format(endDate, 'yyyy-MM-dd'))
+                .gte('end_date', format(startDate, 'yyyy-MM-dd'));
+
+            const daysToApply = eachDayOfInterval({ start: startDate, end: endDate });
+            const user = await supabase.from('users').select('department_id').eq('id', reqData.user_id).single();
+            const deptId = user.data?.department_id;
+            
+            if (deptId) {
+                 const settings = await this.getSettings(companyId, deptId);
+                 const newSchedules: any[] = [];
+                 
+                 for (const day of daysToApply) {
+                     const dateStr = format(day, 'yyyy-MM-dd');
+                     const dayStr = String(getDay(day));
+                     const dailySettings = settings[dayStr];
+                     
+                     if (!dailySettings || !dailySettings.is_working_day || !dailySettings.shifts) continue;
+                     
+                     const targetShift = dailySettings.shifts.find((s: any) => s.name === reqData.requested_shift_name);
+                     if (!targetShift) continue;
+
+                     const userAbsent = absences?.find(a => dateStr >= a.start_date && dateStr <= a.end_date);
+                     
+                     newSchedules.push({
+                         company_id: companyId,
+                         user_id: reqData.user_id,
+                         date: dateStr,
+                         shift_name: targetShift.name,
+                         start_time: targetShift.start_time,
+                         end_time: targetShift.end_time,
+                         status: userAbsent ? 'replacement_needed' : 'scheduled'
+                     });
+                 }
+                 
+                 if (newSchedules.length > 0) {
+                     await supabase.from('schedules').upsert(newSchedules, { onConflict: 'user_id,date' });
+                 }
+            }
+        }
+        
+        // 3. Create Notification
+        await supabase.from('notifications').insert({
+            company_id: companyId,
+            user_id: reqData.user_id,
+            title: `Dyspozycja grafiku: ${status === 'approved' ? 'Zatwierdzona' : 'Odrzucona'}`,
+            message: `Twoja dyspozycja na zmianę "${reqData.requested_shift_name}" (${reqData.start_date}${reqData.end_date ? ` do ${reqData.end_date}` : ''}) została ${status === 'approved' ? 'zatwierdzona' : 'odrzucona'}.`,
+            type: `shift_request_${status}`
+        });
+
         return { success: true };
     }
 }

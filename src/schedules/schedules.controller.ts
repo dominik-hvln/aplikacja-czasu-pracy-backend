@@ -3,7 +3,7 @@ import { SchedulesService } from './schedules.service';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles, Role } from '../auth/roles.decorator';
-import { GenerateScheduleDto, UpdateScheduleDto, UpdateSettingsDto, CreateShiftRequestDto, UpdateShiftRequestStatusDto } from './dto/schedule.dtos';
+import { GenerateScheduleDto, UpdateScheduleDto, UpdateSettingsDto, CreateShiftRequestDto, UpdateShiftRequestStatusDto, CreateScheduleDto } from './dto/schedule.dtos';
 
 @Controller('schedules')
 @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -13,30 +13,38 @@ export class SchedulesController {
     // --- Settings ---
     @Get('settings')
     @Roles(Role.Admin, Role.Manager)
-    getSettings(@Req() req) {
-        return this.schedulesService.getSettings(req.user.company_id);
+    getSettings(@Req() req, @Query('departmentId') departmentId: string) {
+        if (!departmentId) return null;
+        return this.schedulesService.getSettings(req.user.company_id, departmentId);
     }
 
     @Put('settings')
     @Roles(Role.Admin, Role.Manager)
-    updateSettings(@Req() req, @Body() updateDto: UpdateSettingsDto) {
-        return this.schedulesService.updateSettings(req.user.company_id, updateDto);
+    updateSettings(@Req() req, @Query('departmentId') departmentId: string, @Body() updateDto: UpdateSettingsDto) {
+        if (!departmentId) throw new Error("Department ID required");
+        return this.schedulesService.updateSettings(req.user.company_id, departmentId, updateDto);
     }
 
     // --- Schedules ---
     @Get()
-    getSchedules(@Req() req, @Query('month') month: number, @Query('year') year: number) {
+    getSchedules(@Req() req, @Query('month') month: number, @Query('year') year: number, @Query('departmentId') departmentId?: string) {
         return this.schedulesService.getSchedules({ 
             userId: req.user.id, 
             role: req.user.role, 
             companyId: req.user.company_id 
-        }, month, year);
+        }, month, year, departmentId);
+    }
+
+    @Post()
+    @Roles(Role.Admin, Role.Manager)
+    createSchedule(@Req() req, @Body() createDto: CreateScheduleDto) {
+        return this.schedulesService.createSchedule(req.user.company_id, createDto);
     }
 
     @Post('generate')
     @Roles(Role.Admin, Role.Manager)
     generateSchedule(@Req() req, @Body() generateDto: GenerateScheduleDto) {
-        return this.schedulesService.generateSchedule(req.user.company_id, generateDto.month, generateDto.year);
+        return this.schedulesService.generateSchedule(req.user.company_id, generateDto.department_id, generateDto.month, generateDto.year);
     }
 
     @Put(':id')
