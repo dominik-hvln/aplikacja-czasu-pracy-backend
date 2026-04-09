@@ -55,7 +55,7 @@ export class AuthService {
 
     // === WYSYŁKA MAILI przez SMTP (Nodemailer) ===
     private async sendSmtpEmail(to: string, subject: string, html: string, text: string) {
-        const fromHeader = this.config.get<string>('MAIL_FROM') || '"Aplikacja Czasu Pracy" <no-reply@localhost>';
+        const fromHeader = this.config.get<string>('MAIL_FROM') || '"Effixy" <no-reply@localhost>';
         const mailTransporter = this.getTransporter();
 
         try {

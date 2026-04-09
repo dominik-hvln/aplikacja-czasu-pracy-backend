@@ -45,7 +45,7 @@ export class ReportsService {
 
     // Metoda pomocnicza do wysyłki maila z raportem przez SMTP
     private async sendEmailWithAttachment(to: string, subject: string, text: string, pdfBuffer: Buffer, filename: string) {
-        const fromHeader = this.config.get<string>('MAIL_FROM') || '"Aplikacja Czasu Pracy" <no-reply@localhost>';
+        const fromHeader = this.config.get<string>('MAIL_FROM') || '"Effixy" <no-reply@localhost>';
         const mailTransporter = this.getTransporter();
 
         try {
