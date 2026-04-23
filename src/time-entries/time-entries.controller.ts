@@ -4,11 +4,20 @@ import { AuthGuard } from '@nestjs/passport';
 import { Role, Roles } from "../auth/roles.decorator";
 import { UpdateTimeEntryDto } from "./dto/update-time-entry.dto";
 import { SwitchTaskDto } from './dto/switch-task.dto';
+import { CreateManualTimeEntryDto } from './dto/create-manual-time-entry.dto';
 
 @Controller('time-entries')
 @UseGuards(AuthGuard('jwt'))
 export class TimeEntriesController {
     constructor(private readonly timeEntriesService: TimeEntriesService) { }
+
+    @Post('manual')
+    @Roles(Role.Admin, Role.Manager)
+    createManual(@Body() createManualTimeEntryDto: CreateManualTimeEntryDto, @Req() req) {
+        const companyId = req.user.company_id;
+        const editorId = req.user.id;
+        return this.timeEntriesService.createManual(companyId, createManualTimeEntryDto, editorId);
+    }
 
     @Post('scan')
     handleScan(@Body() body: { qrCodeValue: string, location?: { latitude: number, longitude: number }, timestamp?: string }, @Req() req) {

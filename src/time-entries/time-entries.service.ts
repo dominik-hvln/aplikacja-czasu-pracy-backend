@@ -242,7 +242,7 @@ export class TimeEntriesService {
     async findAllForCompany(companyId: string, filters: { dateFrom?: string; dateTo?: string; userId?: string }) {
         const supabase = this.supabaseService.getClient();
         let query = supabase.from('time_entries').select(`
-                id, start_time, end_time, was_edited, is_outside_geofence,
+                id, start_time, end_time, was_edited, is_outside_geofence, is_manual, manual_comment,
                 user:users ( first_name, last_name ),
                 project:projects ( name ),
                 task:tasks ( name )
@@ -295,6 +295,39 @@ export class TimeEntriesService {
             .from('audit_logs').select('*, editor:users (first_name, last_name)')
             .eq('target_time_entry_id', entryId).order('created_at', { ascending: false });
         if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
+    async createManual(companyId: string, dto: any, editorId: string) {
+        const supabase = this.supabaseService.getClient();
+        
+        const { data, error } = await supabase
+            .from('time_entries')
+            .insert({
+                user_id: dto.user_id,
+                company_id: companyId,
+                project_id: dto.project_id || null,
+                task_id: dto.task_id || null,
+                start_time: dto.start_time,
+                end_time: dto.end_time,
+                is_manual: true,
+                manual_comment: dto.manual_comment,
+                was_edited: false,
+                is_outside_geofence: false
+            })
+            .select('*, user:users(first_name, last_name), project:projects(name), task:tasks(name)')
+            .single();
+
+        if (error) throw new InternalServerErrorException(error.message);
+
+        // Audit log
+        await supabase.from('audit_logs').insert({
+            editor_user_id: editorId,
+            target_time_entry_id: data.id,
+            previous_values: {},
+            new_values: data,
+            change_reason: `Ręczne dodanie wpisu: ${dto.manual_comment}`,
+        });
+
         return data;
     }
 }
