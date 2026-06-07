@@ -1,4 +1,7 @@
-import { format, parseISO } from 'date-fns';
+import { parseISO } from 'date-fns';
+import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
+
+export const APP_TIMEZONE = 'Europe/Warsaw';
 
 export const SCAN_COOLDOWN_MS = 2 * 60 * 1000;
 
@@ -64,7 +67,38 @@ export function getAbsenceScheduleStatus(absenceType: string): 'on_leave' | 'sic
 }
 
 export function eventDateStr(isoTime: string): string {
-    return format(parseISO(isoTime), 'yyyy-MM-dd');
+    return formatInTimeZone(parseISO(isoTime), APP_TIMEZONE, 'yyyy-MM-dd');
+}
+
+/** Kalendarzowa data (YYYY-MM-DD) z parametru filtra — akceptuje ISO lub samą datę. */
+export function extractDatePart(value?: string): string | undefined {
+    if (!value) return undefined;
+    return value.substring(0, 10);
+}
+
+/**
+ * Zakres filtra ewidencji wyłącznie po start_time (miesiąc rozliczeniowy = dzień rozpoczęcia).
+ * Granice dnia liczone w strefie Europe/Warsaw.
+ */
+export function buildStartTimeFilterRange(dateFrom?: string, dateTo?: string): {
+    fromDate?: string;
+    toDate?: string;
+    fromIso?: string;
+    toIso?: string;
+} {
+    const fromDate = extractDatePart(dateFrom);
+    const toDate = extractDatePart(dateTo);
+
+    return {
+        fromDate,
+        toDate,
+        fromIso: fromDate
+            ? fromZonedTime(`${fromDate}T00:00:00.000`, APP_TIMEZONE).toISOString()
+            : undefined,
+        toIso: toDate
+            ? fromZonedTime(`${toDate}T23:59:59.999`, APP_TIMEZONE).toISOString()
+            : undefined,
+    };
 }
 
 export function combineDateAndTime(dateStr: string, timeStr: string): Date {

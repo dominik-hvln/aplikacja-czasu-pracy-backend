@@ -14,6 +14,7 @@ import {
     combineDateAndTime,
     computeEffectiveStart,
     eventDateStr,
+    buildStartTimeFilterRange,
     getAbsenceScheduleStatus,
     getScanConfirmCopy,
     getShiftDurationMinutes,
@@ -378,9 +379,10 @@ export class TimeEntriesService {
             `)
             .eq('company_id', companyId);
 
-        // Attribution month = month of start_time (confirmed business rule)
-        if (filters.dateFrom) query = query.gte('start_time', filters.dateFrom);
-        if (filters.dateTo) query = query.lte('start_time', filters.dateTo);
+        // Miesiąc rozliczeniowy = wyłącznie start_time (nigdy end_time), granice dnia w Europe/Warsaw
+        const { fromIso, toIso } = buildStartTimeFilterRange(filters.dateFrom, filters.dateTo);
+        if (fromIso) query = query.gte('start_time', fromIso);
+        if (toIso) query = query.lte('start_time', toIso);
         if (filters.userId) query = query.eq('user_id', filters.userId);
 
         const { data, error } = await query.order('start_time', { ascending: false });
@@ -410,14 +412,9 @@ export class TimeEntriesService {
             .in('status', ['on_leave', 'sick_leave']);
 
         if (filters.userId) scheduleQuery = scheduleQuery.eq('user_id', filters.userId);
-        if (filters.dateFrom) {
-            const fromStr = filters.dateFrom.substring(0, 10);
-            scheduleQuery = scheduleQuery.gte('date', fromStr);
-        }
-        if (filters.dateTo) {
-            const toStr = filters.dateTo.substring(0, 10);
-            scheduleQuery = scheduleQuery.lte('date', toStr);
-        }
+        const { fromDate, toDate } = buildStartTimeFilterRange(filters.dateFrom, filters.dateTo);
+        if (fromDate) scheduleQuery = scheduleQuery.gte('date', fromDate);
+        if (toDate) scheduleQuery = scheduleQuery.lte('date', toDate);
 
         const { data: absenceSchedules, error } = await scheduleQuery;
         if (error) throw new InternalServerErrorException(error.message);
