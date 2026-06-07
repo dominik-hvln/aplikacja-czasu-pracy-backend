@@ -2,7 +2,8 @@ import { Injectable, BadRequestException, NotFoundException, InternalServerError
 import { SupabaseService } from '../supabase/supabase.service';
 import { HolidaysService } from './holidays.service';
 import { GenerateScheduleDto, UpdateScheduleDto, UpdateSettingsDto, CreateShiftRequestDto, UpdateShiftRequestStatusDto, CreateScheduleDto } from './dto/schedule.dtos';
-import { startOfMonth, endOfMonth, eachDayOfInterval, getDay, format, parseISO, subWeeks, subDays, isBefore, isAfter, parse } from 'date-fns';
+import { startOfMonth, endOfMonth, eachDayOfInterval, getDay, format, parseISO, subDays } from 'date-fns';
+import { getAbsenceScheduleStatus } from '../time-entries/time-entry.utils';
 
 @Injectable()
 export class SchedulesService {
@@ -266,18 +267,19 @@ export class SchedulesService {
                  // Find shift details
                  const targetShift = dailySettings.shifts.find((s: any) => s.name === finalShiftName) || dailySettings.shifts[0];
                  
-                 // Check if user is absent
-                 const userAbsent = absences?.find(a => 
-                     a.user_id === user.id && 
+                 // Check if user is absent (approved before generation → no replacement needed)
+                 const userAbsent = absences?.find(a =>
+                     a.user_id === user.id &&
                      dateStr >= a.start_date && dateStr <= a.end_date
                  );
 
                  // Check for holidays
                  const isHoliday = mergedHolidays.find(h => h.date === dateStr);
                  if (isHoliday) {
-                     // Optionally record as holiday or skip. Here we skip schedule assignment to give free day.
-                     continue; 
+                     continue;
                  }
+
+                 const generatedAt = new Date().toISOString();
 
                  newSchedules.push({
                      company_id: companyId,
@@ -286,13 +288,15 @@ export class SchedulesService {
                      shift_name: targetShift.name,
                      start_time: targetShift.start_time,
                      end_time: targetShift.end_time,
-                     status: userAbsent ? 'replacement_needed' : 'scheduled'
+                     status: userAbsent ? getAbsenceScheduleStatus(userAbsent.type) : 'scheduled',
+                     requires_replacement: false,
+                     generated_at: generatedAt,
                  });
              }
         }
 
-        // Upsert schedules: to avoid duplicating, we first delete existing for that month (or let upsert handle it if we have ON CONFLICT)
-        // Since we have a UNIQUE(user_id, date) we can do an upsert
+        const generatedAt = new Date().toISOString();
+
         if (newSchedules.length > 0) {
             const { error: insertErr } = await supabase
                 .from('schedules')
@@ -301,7 +305,59 @@ export class SchedulesService {
             if (insertErr) throw new InternalServerErrorException(insertErr.message);
         }
 
+        await supabase.from('schedule_generations').upsert({
+            company_id: companyId,
+            department_id: departmentId,
+            month,
+            year,
+            generated_at: generatedAt,
+        }, { onConflict: 'company_id,department_id,month,year' });
+
         return { message: 'Grafik wygenerowany pomyślnie.', count: newSchedules.length };
+    }
+
+    /**
+     * When an absence is approved after schedule generation, mark affected days
+     * as on_leave/sick_leave and flag replacement requirement.
+     */
+    async applyApprovedAbsence(
+        companyId: string,
+        absence: { user_id: string; type: string; start_date: string; end_date: string; reviewed_at?: string },
+    ) {
+        const supabase = this.supabaseService.getClient();
+        const reviewedAt = absence.reviewed_at || new Date().toISOString();
+        const absenceStatus = getAbsenceScheduleStatus(absence.type);
+
+        const { data: schedules, error } = await supabase
+            .from('schedules')
+            .select('*')
+            .eq('company_id', companyId)
+            .eq('user_id', absence.user_id)
+            .gte('date', absence.start_date)
+            .lte('date', absence.end_date);
+
+        if (error) throw new InternalServerErrorException(error.message);
+        if (!schedules || schedules.length === 0) return { updated: 0 };
+
+        let updated = 0;
+        for (const schedule of schedules) {
+            const referenceTs = schedule.generated_at || schedule.created_at;
+            const requiresReplacement = referenceTs
+                ? new Date(reviewedAt).getTime() > new Date(referenceTs).getTime()
+                : true;
+
+            const { error: updateErr } = await supabase
+                .from('schedules')
+                .update({
+                    status: absenceStatus,
+                    requires_replacement: requiresReplacement,
+                })
+                .eq('id', schedule.id);
+
+            if (!updateErr) updated++;
+        }
+
+        return { updated };
     }
 
     async updateSchedule(id: string, companyId: string, updateDto: UpdateScheduleDto) {
@@ -313,12 +369,11 @@ export class SchedulesService {
             end_time: updateDto.end_time
         }
         if (updateDto.status) updateData.status = updateDto.status;
-        if (updateDto.user_id) updateData.user_id = updateDto.user_id; // changing employee (replacement)
-        
-        // if substituting an absent person, it changes the user_id for this record
-        // if user_id changes, status should probably become 'scheduled' again
+        if (updateDto.user_id) updateData.user_id = updateDto.user_id;
+
         if (updateDto.user_id) {
              updateData.status = 'scheduled';
+             updateData.requires_replacement = false;
         }
 
         const { error } = await supabase
@@ -444,7 +499,7 @@ export class SchedulesService {
                      if (!targetShift) continue;
 
                      const userAbsent = absences?.find(a => dateStr >= a.start_date && dateStr <= a.end_date);
-                     
+
                      newSchedules.push({
                          company_id: companyId,
                          user_id: reqData.user_id,
@@ -452,7 +507,8 @@ export class SchedulesService {
                          shift_name: targetShift.name,
                          start_time: targetShift.start_time,
                          end_time: targetShift.end_time,
-                         status: userAbsent ? 'replacement_needed' : 'scheduled'
+                         status: userAbsent ? getAbsenceScheduleStatus(userAbsent.type) : 'scheduled',
+                         requires_replacement: false,
                      });
                  }
                  

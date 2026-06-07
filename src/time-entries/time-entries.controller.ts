@@ -19,11 +19,38 @@ export class TimeEntriesController {
         return this.timeEntriesService.createManual(companyId, createManualTimeEntryDto, editorId);
     }
 
+    @Post('scan/preview')
+    previewScan(@Body() body: { qrCodeValue: string }, @Req() req) {
+        return this.timeEntriesService.previewScan(req.user.id, body.qrCodeValue);
+    }
+
     @Post('scan')
     handleScan(@Body() body: { qrCodeValue: string, location?: { latitude: number, longitude: number }, timestamp?: string }, @Req() req) {
         const userId = req.user.id;
         const companyId = req.user.company_id;
         return this.timeEntriesService.handleScan(userId, companyId, body.qrCodeValue, body.location, body.timestamp);
+    }
+
+    @Get('my-active')
+    @Roles(Role.Employee, Role.Admin, Role.Manager)
+    findMyActiveEntry(@Req() req) {
+        const userId = req.user.id;
+        return this.timeEntriesService.findActiveForUser(userId);
+    }
+
+    @Get('summary')
+    @Roles(Role.Admin, Role.Manager, Role.Employee)
+    getSummary(
+        @Req() req,
+        @Query('dateFrom') dateFrom?: string,
+        @Query('dateTo') dateTo?: string,
+        @Query('userId') userId?: string,
+    ) {
+        const companyId = req.user.company_id;
+        if (req.user.role === Role.Employee) {
+            userId = req.user.id;
+        }
+        return this.timeEntriesService.getSummary(companyId, { dateFrom, dateTo, userId });
     }
 
     @Get()
@@ -80,12 +107,5 @@ export class TimeEntriesController {
     switchTask(@Body() switchTaskDto: SwitchTaskDto, @Req() req) {
         const { id: userId, company_id: companyId } = req.user;
         return this.timeEntriesService.switchTask(userId, companyId, switchTaskDto.taskId, switchTaskDto.location);
-    }
-
-    @Get('my-active')
-    @Roles(Role.Employee, Role.Admin, Role.Manager) // Dostępny dla wszystkich ról
-    findMyActiveEntry(@Req() req) {
-        const userId = req.user.id;
-        return this.timeEntriesService.findActiveForUser(userId);
     }
 }

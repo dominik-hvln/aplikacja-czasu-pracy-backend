@@ -1,10 +1,14 @@
 import { Injectable, InternalServerErrorException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateAbsenceDto, UpdateAbsenceStatusDto } from './dto/absence.dtos';
+import { SchedulesService } from '../schedules/schedules.service';
 
 @Injectable()
 export class AbsencesService {
-    constructor(private readonly supabaseService: SupabaseService) {}
+    constructor(
+        private readonly supabaseService: SupabaseService,
+        private readonly schedulesService: SchedulesService,
+    ) {}
 
     async create(userId: string, companyId: string, createAbsenceDto: CreateAbsenceDto) {
         const supabase = this.supabaseService.getClient();
@@ -96,17 +100,30 @@ export class AbsencesService {
             throw new ForbiddenException('Możesz akceptować tylko wnioski swoich podwładnych');
         }
 
+        const reviewedAt = new Date().toISOString();
         const { data, error } = await supabase
             .from('absences')
             .update({
                 status: updateDto.status,
-                reviewed_by: user.id
+                reviewed_by: user.id,
+                reviewed_at: updateDto.status === 'approved' ? reviewedAt : null,
             })
             .eq('id', id)
             .select()
             .single();
 
         if (error) throw new InternalServerErrorException(error.message);
+
+        if (updateDto.status === 'approved') {
+            await this.schedulesService.applyApprovedAbsence(user.companyId, {
+                user_id: data.user_id,
+                type: data.type,
+                start_date: data.start_date,
+                end_date: data.end_date,
+                reviewed_at: reviewedAt,
+            });
+        }
+
         return data;
     }
 
