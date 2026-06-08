@@ -101,10 +101,19 @@ export function buildStartTimeFilterRange(dateFrom?: string, dateTo?: string): {
     };
 }
 
+/** Normalizuje TIME z bazy (np. "12:00" / "12:00:00") do HH:mm:ss. */
+export function normalizeTimeStr(timeStr: string): string {
+    const parts = timeStr.trim().split(':');
+    const h = parts[0]?.padStart(2, '0') ?? '00';
+    const m = parts[1]?.padStart(2, '0') ?? '00';
+    const s = (parts[2] ?? '00').split('.')[0].padStart(2, '0');
+    return `${h}:${m}:${s}`;
+}
+
+/** Łączy datę kalendarzową i godzinę planu w Europe/Warsaw → Date UTC. */
 export function combineDateAndTime(dateStr: string, timeStr: string): Date {
-    const [y, m, d] = dateStr.split('-').map(Number);
-    const timeParts = timeStr.split(':').map(Number);
-    return new Date(y, m - 1, d, timeParts[0], timeParts[1] || 0, 0, 0);
+    const time = normalizeTimeStr(timeStr);
+    return fromZonedTime(`${dateStr}T${time}`, APP_TIMEZONE);
 }
 
 /**
