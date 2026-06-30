@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, BadRequestException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { CreateSystemUserDto } from './dto/create-user.dto';
@@ -105,6 +105,67 @@ export class SuperAdminService {
             throw new InternalServerErrorException(`Błąd pobierania użytkowników: ${error.message}`);
         }
         return data;
+    }
+
+    private readonly logger = new Logger(SuperAdminService.name);
+
+    /**
+     * Trwale usuwa firmę wraz ze wszystkimi pracownikami i danymi.
+     * 1) usuwa konta logowania (Supabase Auth) — kasuje też wiersze public.users (kaskada),
+     * 2) sprząta ewentualne pozostałe wiersze users,
+     * 3) usuwa firmę — pozostałe dane firmowe znikają kaskadowo (ON DELETE CASCADE).
+     */
+    async deleteCompany(companyId: string) {
+        const admin = this.supabaseService.getAdminClient();
+
+        const { data: company, error: compErr } = await admin
+            .from('companies')
+            .select('id, name')
+            .eq('id', companyId)
+            .maybeSingle();
+        if (compErr) throw new InternalServerErrorException(compErr.message);
+        if (!company) throw new NotFoundException('Nie znaleziono firmy.');
+
+        // 1. Pobierz pracowników firmy
+        const { data: users, error: usersErr } = await admin
+            .from('users')
+            .select('id')
+            .eq('company_id', companyId);
+        if (usersErr) throw new InternalServerErrorException(usersErr.message);
+        const userIds = (users || []).map((u: any) => u.id);
+
+        // 2. Usuń konta Auth (kasuje też public.users dzięki ON DELETE CASCADE)
+        const authErrors: string[] = [];
+        for (const uid of userIds) {
+            try {
+                const { error } = await admin.auth.admin.deleteUser(uid);
+                if (error && !/not\s*found/i.test(error.message)) {
+                    authErrors.push(`${uid}: ${error.message}`);
+                }
+            } catch (e: any) {
+                authErrors.push(`${uid}: ${e?.message || 'błąd usuwania konta'}`);
+            }
+        }
+        if (authErrors.length > 0) {
+            this.logger.warn(`Usuwanie firmy ${companyId}: błędy kont Auth: ${authErrors.join('; ')}`);
+        }
+
+        // 3. Posprzątaj ewentualne pozostałe wiersze users (gdyby brakło konta Auth/kaskady)
+        await admin.from('users').delete().eq('company_id', companyId);
+
+        // 4. Usuń firmę (reszta danych firmowych znika kaskadowo)
+        const { error: delErr } = await admin.from('companies').delete().eq('id', companyId);
+        if (delErr) {
+            throw new InternalServerErrorException(
+                `Nie udało się usunąć firmy: ${delErr.message}. Sprawdź zależności (FK) bez ON DELETE CASCADE.`,
+            );
+        }
+
+        return {
+            message: `Usunięto firmę „${company.name}" oraz ${userIds.length} kont pracowników.`,
+            deletedUsers: userIds.length,
+            authErrors,
+        };
     }
 
     async createCompany(createCompanyDto: CreateCompanyDto) {

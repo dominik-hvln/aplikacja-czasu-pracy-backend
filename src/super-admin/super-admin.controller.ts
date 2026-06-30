@@ -45,6 +45,12 @@ export class SuperAdminController {
         return this.superAdminService.createCompany(createCompanyDto);
     }
 
+    @Delete('companies/:id')
+    @Roles(Role.SuperAdmin)
+    deleteCompany(@Param('id') id: string) {
+        return this.superAdminService.deleteCompany(id);
+    }
+
     @Post('users')
     @Roles(Role.SuperAdmin)
     createUser(@Body() createUserDto: CreateSystemUserDto) {
