@@ -10,6 +10,12 @@ import { UpdateBillingProfileDto } from './dto/update-billing-profile.dto';
 export class BillingController {
     constructor(private readonly billingService: BillingService) {}
 
+    /** Ustawienia globalne widoczne dla każdego zalogowanego (ogłoszenie, dane przelewu). */
+    @Get('public-settings')
+    getPublicSettings() {
+        return this.billingService.getPublicAppSettings();
+    }
+
     /** Profil rozliczeniowy firmy + flagi onboardingu. */
     @Get('profile')
     @Roles(Role.Admin, Role.Manager)

@@ -245,6 +245,22 @@ export class BillingService {
         }
     }
 
+    /** Ustawienia widoczne dla każdego zalogowanego: ogłoszenie + dane do przelewu. */
+    async getPublicAppSettings() {
+        const { data } = await this.admin
+            .from('app_settings')
+            .select('key, value')
+            .in('key', ['global_announcement', 'bank_transfer_details']);
+        const map: Record<string, string | null> = {};
+        (data || []).forEach((r: any) => {
+            map[r.key] = r.value;
+        });
+        return {
+            announcement: map['global_announcement']?.trim() || null,
+            bankTransferDetails: map['bank_transfer_details']?.trim() || null,
+        };
+    }
+
     /** Zapisuje akceptację regulaminu przez admina/managera w imieniu firmy. */
     async acceptTerms(companyId: string, userId: string) {
         const { error } = await this.admin

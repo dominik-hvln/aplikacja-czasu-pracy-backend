@@ -39,6 +39,24 @@ export class SuperAdminController {
         return this.superAdminService.getAllUsers();
     }
 
+    @Post('users/:id/status')
+    @Roles(Role.SuperAdmin)
+    setUserActive(@Param('id') id: string, @Body() body: { active: boolean }) {
+        return this.superAdminService.setUserActive(id, body.active);
+    }
+
+    @Post('users/:id/reset-password')
+    @Roles(Role.SuperAdmin)
+    resetUserPassword(@Param('id') id: string) {
+        return this.superAdminService.resetUserPassword(id);
+    }
+
+    @Get('subscriptions')
+    @Roles(Role.SuperAdmin)
+    getAllSubscriptions() {
+        return this.superAdminService.getAllSubscriptions();
+    }
+
     @Post('companies')
     @Roles(Role.SuperAdmin)
     createCompany(@Body() createCompanyDto: CreateCompanyDto) {

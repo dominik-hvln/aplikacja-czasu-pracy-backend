@@ -6,12 +6,16 @@ import { CreatePlanDto } from './dto/create-plan.dto';
 import { CreateModuleDto } from './dto/create-module.dto';
 
 import { StripeService } from '../stripe/stripe.service';
+import { ConfigService } from '@nestjs/config';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class SuperAdminService {
     constructor(
         private readonly supabaseService: SupabaseService,
-        private readonly stripeService: StripeService
+        private readonly stripeService: StripeService,
+        private readonly config: ConfigService,
+        private readonly mailService: MailService,
     ) { }
 
     async getAllCompanies() {
@@ -98,12 +102,87 @@ export class SuperAdminService {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
             .from('users')
-            .select('*')
+            .select('id, email, first_name, last_name, role, status, company_id, created_at')
             .order('created_at', { ascending: false });
 
         if (error) {
             throw new InternalServerErrorException(`Błąd pobierania użytkowników: ${error.message}`);
         }
+
+        // Dołącz nazwę firmy
+        const { data: companies } = await supabase.from('companies').select('id, name');
+        const companyName = new Map((companies || []).map((c: any) => [c.id, c.name]));
+
+        return (data || []).map((u: any) => ({
+            ...u,
+            company_name: u.company_id ? companyName.get(u.company_id) || null : null,
+        }));
+    }
+
+    /** Aktywuje/dezaktywuje użytkownika (ban w Auth + status w profilu). */
+    async setUserActive(userId: string, active: boolean) {
+        const admin = this.supabaseService.getAdminClient();
+
+        try {
+            await admin.auth.admin.updateUserById(userId, {
+                ban_duration: active ? 'none' : '876600h', // ~100 lat = trwała blokada
+            });
+        } catch (e: any) {
+            throw new InternalServerErrorException(`Błąd zmiany statusu konta: ${e?.message}`);
+        }
+
+        const { error } = await admin
+            .from('users')
+            .update({ status: active ? 'active' : 'inactive' })
+            .eq('id', userId);
+        if (error) throw new InternalServerErrorException(error.message);
+
+        return { message: active ? 'Użytkownik aktywowany' : 'Użytkownik dezaktywowany', active };
+    }
+
+    /** Wysyła e-mail z linkiem do resetu hasła dla wskazanego użytkownika. */
+    async resetUserPassword(userId: string) {
+        const admin = this.supabaseService.getAdminClient();
+        const { data: user } = await admin.from('users').select('email').eq('id', userId).maybeSingle();
+        if (!user?.email) throw new NotFoundException('Nie znaleziono użytkownika lub adresu e-mail.');
+
+        const appUrl = this.config.get<string>('APP_URL')?.replace(/\/+$/, '') || 'http://localhost:3000';
+        const backendUrl = this.config.get<string>('BACKEND_URL')?.replace(/\/+$/, '') || 'http://localhost:4000';
+
+        const { data: linkData, error } = await admin.auth.admin.generateLink({
+            type: 'recovery',
+            email: user.email,
+            options: { redirectTo: `${appUrl}/auth/reset` },
+        });
+        if (error) throw new InternalServerErrorException(`Nie udało się wygenerować linku: ${error.message}`);
+
+        let resetUrl = linkData?.properties?.action_link;
+        if (resetUrl) {
+            try {
+                const token = new URL(resetUrl).searchParams.get('token');
+                if (token) resetUrl = `${backendUrl}/auth/verify?token=${token}&type=recovery`;
+            } catch { /* zostaw oryginalny link */ }
+        }
+
+        await this.mailService.send(
+            user.email,
+            'Reset hasła',
+            `<p>Administrator zainicjował reset hasła do Twojego konta.</p>
+             <p>Kliknij, aby ustawić nowe hasło:</p>
+             <p><a href="${resetUrl}" target="_blank" rel="noopener noreferrer">${resetUrl}</a></p>`,
+        );
+
+        return { message: `Wysłano link resetujący na ${user.email}` };
+    }
+
+    async getAllSubscriptions() {
+        const supabase = this.supabaseService.getAdminClient();
+        const { data, error } = await supabase
+            .from('subscriptions')
+            .select('*, companies(name, billing_type), plans(name, price_monthly)')
+            .order('current_period_end', { ascending: true });
+
+        if (error) throw new InternalServerErrorException(error.message);
         return data;
     }
 
@@ -238,7 +317,12 @@ export class SuperAdminService {
     }
 
     async updateAppSetting(key: string, value: string | null) {
-        const allowedKeys = ['finance_notification_email'];
+        const allowedKeys = [
+            'finance_notification_email',
+            'global_announcement',
+            'bank_transfer_details',
+            'default_trial_days',
+        ];
         if (!allowedKeys.includes(key)) {
             throw new BadRequestException(`Nieobsługiwany klucz ustawienia: ${key}`);
         }
