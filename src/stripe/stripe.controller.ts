@@ -15,15 +15,33 @@ export class StripeController {
 
     @Get('plans')
     async getPlans() {
-        const supabase = this.supabaseService.getClient();
-        const { data, error } = await supabase
+        const supabase = this.supabaseService.getAdminClient();
+
+        const { data: plans, error } = await supabase
             .from('plans')
             .select('*')
             .eq('is_active', true)
             .order('price_monthly', { ascending: true });
 
         if (error) throw new BadRequestException(error.message);
-        return data;
+        if (!plans || plans.length === 0) return [];
+
+        // Dołącz realne funkcje (moduły) każdego planu
+        const planIds = plans.map((p) => p.id);
+        const [{ data: planModules }, { data: modules }] = await Promise.all([
+            supabase.from('plan_modules').select('plan_id, module_code').in('plan_id', planIds),
+            supabase.from('modules').select('code, name, description').eq('is_active', true),
+        ]);
+
+        const moduleByCode = new Map((modules || []).map((m) => [m.code, m]));
+
+        return plans.map((plan) => ({
+            ...plan,
+            modules: (planModules || [])
+                .filter((pm) => pm.plan_id === plan.id)
+                .map((pm) => moduleByCode.get(pm.module_code))
+                .filter(Boolean),
+        }));
     }
 
     @Get('subscription')
@@ -83,13 +101,32 @@ export class StripeController {
         // BUT we need it for subscriptions.
 
         const supabase = this.supabaseService.getAdminClient();
-        const { data: company } = await supabase.from('companies').select('stripe_customer_id, name').eq('id', body.companyId).single();
+        const { data: company } = await supabase
+            .from('companies')
+            .select('stripe_customer_id, name, legal_name, tax_id, billing_email, billing_street, billing_postal_code, billing_city')
+            .eq('id', body.companyId)
+            .single();
 
         let customerId = company?.stripe_customer_id;
 
         if (!customerId) {
-            // Create customer
-            const newCustomer = await this.stripeService.createCustomer(`company-${body.companyId}@kadromierz.pl`, company?.name || 'Company');
+            // Wymagamy uzupełnionych danych firmy przed płatnością kartą (faktura/Stripe customer)
+            if (!company?.billing_email || !company?.tax_id) {
+                throw new BadRequestException('Najpierw uzupełnij dane firmy (NIP i e-mail do faktur).');
+            }
+
+            const newCustomer = await this.stripeService.createCustomer(
+                company.billing_email,
+                company.legal_name || company.name || 'Firma',
+                {
+                    taxId: company.tax_id,
+                    address: {
+                        line1: company.billing_street,
+                        postal_code: company.billing_postal_code,
+                        city: company.billing_city,
+                    },
+                },
+            );
             customerId = newCustomer.id;
             // Save to DB
             await supabase.from('companies').update({ stripe_customer_id: customerId }).eq('id', body.companyId);

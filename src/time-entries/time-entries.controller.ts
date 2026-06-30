@@ -2,12 +2,15 @@ import { Controller, Post, Body, UseGuards, Req, Get, Query, Patch, Param, Delet
 import { TimeEntriesService } from './time-entries.service';
 import { AuthGuard } from '@nestjs/passport';
 import { Role, Roles } from "../auth/roles.decorator";
+import { ModuleGuard } from '../auth/module.guard';
+import { RequiredModules } from '../auth/modules.decorator';
 import { UpdateTimeEntryDto } from "./dto/update-time-entry.dto";
 import { SwitchTaskDto } from './dto/switch-task.dto';
 import { CreateManualTimeEntryDto } from './dto/create-manual-time-entry.dto';
 
 @Controller('time-entries')
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(AuthGuard('jwt'), ModuleGuard)
+@RequiredModules('time_tracking')
 export class TimeEntriesController {
     constructor(private readonly timeEntriesService: TimeEntriesService) { }
 

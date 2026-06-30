@@ -10,7 +10,9 @@ import { RequiredModules } from '../auth/modules.decorator';
 
 @Controller('reports')
 @UseGuards(AuthGuard('jwt'), RolesGuard, ModuleGuard)
-@RequiredModules('reports')
+// Zakładka "Raporty" (generowanie z szablonów) = raporty zaawansowane.
+// Podstawowe raporty to eksport PDF/CSV z Ewidencji czasu (po stronie klienta, moduł 'reports').
+@RequiredModules('reports_advanced')
 export class ReportsController {
     constructor(private readonly reportsService: ReportsService) { }
 

@@ -5,6 +5,43 @@ import { SupabaseService } from '../supabase/supabase.service';
 export class CompanySettingsService {
     constructor(private readonly supabaseService: SupabaseService) {}
 
+    // WORK NORM SETTINGS (norma dobowa + święta)
+    async getWorkSettings(companyId: string) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('companies')
+            .select('daily_norm_hours, count_holidays_as_work')
+            .eq('id', companyId)
+            .maybeSingle();
+        if (error) throw new InternalServerErrorException(error.message);
+        return {
+            daily_norm_hours: Number(data?.daily_norm_hours ?? 8),
+            count_holidays_as_work: data?.count_holidays_as_work !== false,
+        };
+    }
+
+    async updateWorkSettings(
+        companyId: string,
+        dto: { daily_norm_hours?: number; count_holidays_as_work?: boolean },
+    ) {
+        const updates: any = {};
+        if (dto.daily_norm_hours !== undefined) {
+            const v = Number(dto.daily_norm_hours);
+            if (isNaN(v) || v < 0 || v > 24) {
+                throw new InternalServerErrorException('Norma dobowa musi być z zakresu 0–24 godzin.');
+            }
+            updates.daily_norm_hours = v;
+        }
+        if (dto.count_holidays_as_work !== undefined) {
+            updates.count_holidays_as_work = Boolean(dto.count_holidays_as_work);
+        }
+
+        const supabase = this.supabaseService.getClient();
+        const { error } = await supabase.from('companies').update(updates).eq('id', companyId);
+        if (error) throw new InternalServerErrorException(error.message);
+        return this.getWorkSettings(companyId);
+    }
+
     // DEPARTMENTS
     async getDepartments(companyId: string) {
         const supabase = this.supabaseService.getClient();

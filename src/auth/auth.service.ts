@@ -14,6 +14,13 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import { BillingService } from '../billing/billing.service';
+
+// Kolumny firmy zwracane w profilu (dane rozliczeniowe + akceptacja regulaminu)
+const COMPANY_PROFILE_COLUMNS =
+    'id, name, legal_name, tax_id, billing_street, billing_postal_code, billing_city, ' +
+    'billing_email, billing_type, billing_details_completed_at, ' +
+    'accepted_terms_version, terms_accepted_at, terms_accepted_by';
 
 @Injectable()
 export class AuthService {
@@ -185,18 +192,9 @@ export class AuthService {
             .from('users').select('*').eq('id', data.user.id).single();
         if (profileError) throw new InternalServerErrorException(profileError.message);
 
-        let modules: string[] = [];
-        if (profile.company_id) {
-            const { data: modData } = await supabase
-                .from('company_modules')
-                .select('module_code')
-                .eq('company_id', profile.company_id);
-            if (modData) {
-                modules = modData.map(m => m.module_code);
-            }
-        }
+        const enriched = await this.enrichProfile(supabase, profile);
 
-        return { session: data.session, profile: { ...profile, modules } };
+        return { session: data.session, profile: enriched };
     }
 
     async getUserProfile(userId: string) {
@@ -208,19 +206,38 @@ export class AuthService {
             throw new UnauthorizedException('Nie znaleziono użytkownika.');
         }
 
-        let modules: string[] = [];
-        if (profile.company_id) {
-            const { data: modData } = await supabase
-                .from('company_modules')
-                .select('module_code')
-                .eq('company_id', profile.company_id);
+        return this.enrichProfile(supabase, profile);
+    }
 
-            if (modData) {
-                modules = modData.map(m => m.module_code);
-            }
+    /**
+     * Wzbogaca profil użytkownika o aktywne moduły, dane firmy oraz flagi
+     * onboardingu / akceptacji regulaminu (dla admina i managera).
+     */
+    private async enrichProfile(supabase: any, profile: any) {
+        let modules: string[] = [];
+        let company: any = null;
+
+        if (profile.company_id) {
+            const adminClient = this.supabaseService.getAdminClient();
+            const [{ data: modData }, { data: companyData }] = await Promise.all([
+                supabase
+                    .from('company_modules')
+                    .select('module_code')
+                    .eq('company_id', profile.company_id),
+                adminClient
+                    .from('companies')
+                    .select(COMPANY_PROFILE_COLUMNS)
+                    .eq('id', profile.company_id)
+                    .maybeSingle(),
+            ]);
+
+            if (modData) modules = modData.map((m: any) => m.module_code);
+            company = companyData || null;
         }
 
-        return { ...profile, modules };
+        const flags = BillingService.computeFlags(company, profile.role);
+
+        return { ...profile, modules, company, ...flags };
     }
 
     async forgotPassword(dto: ForgotPasswordDto) {

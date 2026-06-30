@@ -20,11 +20,15 @@ import {
     getShiftDurationMinutes,
     resolveScanAction,
 } from './time-entry.utils';
-import { differenceInMinutes, parseISO } from 'date-fns';
+import { differenceInMinutes, parseISO, eachDayOfInterval, getDay, format } from 'date-fns';
+import { HolidaysService } from '../schedules/holidays.service';
 
 @Injectable()
 export class TimeEntriesService {
-    constructor(private readonly supabaseService: SupabaseService) {}
+    constructor(
+        private readonly supabaseService: SupabaseService,
+        private readonly holidaysService: HolidaysService,
+    ) {}
 
     // --- Geofencing ---
     private async getGeofenceStatus(
@@ -405,29 +409,208 @@ export class TimeEntriesService {
         }, 0);
 
         const supabase = this.supabaseService.getClient();
+        const { fromDate, toDate } = buildStartTimeFilterRange(filters.dateFrom, filters.dateTo);
+
+        // 1) Nieobecności z grafiku (gdy istnieje wiersz on_leave/sick_leave) — liczone wg zmiany
         let scheduleQuery = supabase
             .from('schedules')
-            .select('user_id, date, start_time, end_time, status, requires_replacement')
+            .select('user_id, date, start_time, end_time, status')
             .eq('company_id', companyId)
             .in('status', ['on_leave', 'sick_leave']);
 
         if (filters.userId) scheduleQuery = scheduleQuery.eq('user_id', filters.userId);
-        const { fromDate, toDate } = buildStartTimeFilterRange(filters.dateFrom, filters.dateTo);
         if (fromDate) scheduleQuery = scheduleQuery.gte('date', fromDate);
         if (toDate) scheduleQuery = scheduleQuery.lte('date', toDate);
 
         const { data: absenceSchedules, error } = await scheduleQuery;
         if (error) throw new InternalServerErrorException(error.message);
 
-        const absenceMinutes = (absenceSchedules || []).reduce((total, s: any) => {
+        const scheduleCovered = new Set<string>();
+        const scheduleAbsenceMinutes = (absenceSchedules || []).reduce((total, s: any) => {
+            scheduleCovered.add(`${s.user_id}|${s.date}`);
             return total + getShiftDurationMinutes(s.start_time, s.end_time);
         }, 0);
+
+        // 2) Nieobecności bez grafiku + święta — wg dni roboczych i godzin zmian
+        //    zdefiniowanych przez firmę (departments.schedule_settings), × etat (FTE).
+        let normAbsenceMinutes = 0;
+        let holidayMinutes = 0;
+
+        if (fromDate && toDate) {
+            const { data: company } = await supabase
+                .from('companies')
+                .select('daily_norm_hours, count_holidays_as_work')
+                .eq('id', companyId)
+                .maybeSingle();
+
+            // Norma dobowa = fallback, gdy dzień jest roboczy, ale nie ma zdefiniowanych godzin zmiany.
+            const fallbackMinutes = Math.round(Number(company?.daily_norm_hours ?? 8) * 60);
+            const countHolidays = company?.count_holidays_as_work !== false;
+
+            const targetUsers = await this.getTargetUsers(companyId, filters.userId);
+            const deptSettings = await this.getDeptSettingsMap(
+                [...new Set([...targetUsers.values()].map((u) => u.departmentId).filter(Boolean) as string[])],
+            );
+            const holidaySet = await this.getHolidaySet(companyId, fromDate, toDate);
+
+            // Zbiór dni nieobecności: `${userId}|${dateStr}`
+            let absQuery = supabase
+                .from('absences')
+                .select('user_id, start_date, end_date')
+                .eq('company_id', companyId)
+                .eq('status', 'approved')
+                .lte('start_date', toDate)
+                .gte('end_date', fromDate);
+            if (filters.userId) absQuery = absQuery.eq('user_id', filters.userId);
+            const { data: absences } = await absQuery;
+
+            const absenceDays = new Set<string>();
+            for (const a of absences || []) {
+                const start = a.start_date < fromDate ? fromDate : a.start_date;
+                const end = a.end_date > toDate ? toDate : a.end_date;
+                if (start > end) continue;
+                for (const d of eachDayOfInterval({ start: parseISO(start), end: parseISO(end) })) {
+                    absenceDays.add(`${a.user_id}|${format(d, 'yyyy-MM-dd')}`);
+                }
+            }
+
+            const days = eachDayOfInterval({ start: parseISO(fromDate), end: parseISO(toDate) });
+
+            for (const day of days) {
+                const dow = getDay(day); // 0 = niedziela ... 6 = sobota
+                const dateStr = format(day, 'yyyy-MM-dd');
+                const isHoliday = holidaySet.has(dateStr);
+
+                for (const [userId, u] of targetUsers) {
+                    // Oczekiwane minuty dla pracownika w tym dniu wg ustawień jego działu
+                    const expected = this.expectedMinutesForDay(deptSettings, u.departmentId, dow, fallbackMinutes);
+                    if (expected <= 0) continue; // nie jest to dzień roboczy dla tego pracownika
+
+                    const minutes = Math.round(expected * u.multiplier);
+
+                    if (isHoliday) {
+                        if (countHolidays) holidayMinutes += minutes;
+                        continue; // święto ma pierwszeństwo, nie doliczamy nieobecności
+                    }
+
+                    if (scheduleCovered.has(`${userId}|${dateStr}`)) continue; // policzone z grafiku
+                    if (absenceDays.has(`${userId}|${dateStr}`)) {
+                        normAbsenceMinutes += minutes;
+                    }
+                }
+            }
+        }
+
+        const absenceMinutes = scheduleAbsenceMinutes + normAbsenceMinutes;
 
         return {
             timeEntryMinutes,
             absenceMinutes,
-            totalMinutes: timeEntryMinutes + absenceMinutes,
+            holidayMinutes,
+            totalMinutes: timeEntryMinutes + absenceMinutes + holidayMinutes,
         };
+    }
+
+    /** Mapa user_id -> { mnożnik etatu (FTE), departmentId }. Dla userId: tylko ta osoba; inaczej: pracownicy firmy. */
+    private async getTargetUsers(
+        companyId: string,
+        userId?: string,
+    ): Promise<Map<string, { multiplier: number; departmentId: string | null }>> {
+        const supabase = this.supabaseService.getClient();
+        let q = supabase.from('users').select('id, fte_id, department_id, status').eq('company_id', companyId);
+        if (userId) q = q.eq('id', userId);
+        else q = q.eq('role', 'employee');
+
+        const { data: users } = await q;
+        const activeUsers = (users || []).filter(
+            (u: any) => u.status !== 'terminated' && u.status !== 'inactive',
+        );
+
+        const fteIds = [...new Set(activeUsers.map((u: any) => u.fte_id).filter(Boolean))];
+        const fteMap = new Map<string, number>();
+        if (fteIds.length > 0) {
+            const { data: ftes } = await supabase
+                .from('ftes')
+                .select('id, multiplier')
+                .in('id', fteIds);
+            (ftes || []).forEach((f: any) => fteMap.set(f.id, Number(f.multiplier) || 1));
+        }
+
+        const map = new Map<string, { multiplier: number; departmentId: string | null }>();
+        activeUsers.forEach((u: any) => {
+            map.set(u.id, {
+                multiplier: u.fte_id && fteMap.has(u.fte_id) ? fteMap.get(u.fte_id)! : 1,
+                departmentId: u.department_id || null,
+            });
+        });
+        return map;
+    }
+
+    /** Mapa department_id -> schedule_settings (JSON wg dni tygodnia). */
+    private async getDeptSettingsMap(departmentIds: string[]): Promise<Map<string, any>> {
+        const map = new Map<string, any>();
+        if (departmentIds.length === 0) return map;
+        const supabase = this.supabaseService.getClient();
+        const { data } = await supabase
+            .from('departments')
+            .select('id, schedule_settings')
+            .in('id', departmentIds);
+        (data || []).forEach((d: any) => {
+            if (d.schedule_settings) map.set(d.id, d.schedule_settings);
+        });
+        return map;
+    }
+
+    /**
+     * Oczekiwane minuty pracy pracownika w danym dniu tygodnia, wg ustawień jego działu:
+     * - dzień nieroboczy -> 0,
+     * - dzień roboczy z godzinami zmiany -> długość pierwszej zmiany,
+     * - dzień roboczy bez zdefiniowanych godzin -> norma dobowa (fallback).
+     * Brak ustawień działu -> fallback pn–pt wg normy dobowej.
+     */
+    private expectedMinutesForDay(
+        deptSettings: Map<string, any>,
+        departmentId: string | null,
+        weekday: number,
+        fallbackMinutes: number,
+    ): number {
+        const settings = departmentId ? deptSettings.get(departmentId) : null;
+        if (settings) {
+            const ds = settings[String(weekday)];
+            if (!ds || !ds.is_working_day) return 0;
+            if (Array.isArray(ds.shifts) && ds.shifts.length > 0) {
+                const s = ds.shifts[0];
+                if (s?.start_time && s?.end_time) {
+                    return getShiftDurationMinutes(s.start_time, s.end_time);
+                }
+            }
+            return fallbackMinutes; // dzień roboczy bez godzin zmiany
+        }
+        // Brak ustawień działu -> domyślnie pn–pt
+        return weekday >= 1 && weekday <= 5 ? fallbackMinutes : 0;
+    }
+
+    /** Zbiór dat świąt (ustawowe PL + firmowe) w zakresie [fromDate, toDate]. */
+    private async getHolidaySet(companyId: string, fromDate: string, toDate: string): Promise<Set<string>> {
+        const set = new Set<string>();
+        const fromYear = Number(fromDate.slice(0, 4));
+        const toYear = Number(toDate.slice(0, 4));
+        for (let y = fromYear; y <= toYear; y++) {
+            this.holidaysService.getPolishPublicHolidays(y).forEach((h) => {
+                if (h.date >= fromDate && h.date <= toDate) set.add(h.date);
+            });
+        }
+
+        const supabase = this.supabaseService.getClient();
+        const { data: companyHolidays } = await supabase
+            .from('company_holidays')
+            .select('date')
+            .eq('company_id', companyId)
+            .gte('date', fromDate)
+            .lte('date', toDate);
+        (companyHolidays || []).forEach((h: any) => set.add(h.date));
+
+        return set;
     }
 
     async update(entryId: string, companyId: string, updateTimeEntryDto: UpdateTimeEntryDto, editorId: string) {

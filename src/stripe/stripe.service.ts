@@ -59,10 +59,15 @@ export class StripeService {
             return;
         }
 
-        // 1. Update Company with Stripe Customer ID
+        // 1. Update Company with Stripe Customer ID + oznacz wybór płatności kartą.
+        //    Ustawienie billing_type='card' + billing_details_completed_at domyka onboarding.
         await supabase
             .from('companies')
-            .update({ stripe_customer_id: customerId })
+            .update({
+                stripe_customer_id: customerId,
+                billing_type: 'card',
+                billing_details_completed_at: new Date().toISOString(),
+            })
             .eq('id', companyId);
 
         // 2. Create/Update Subscription
@@ -177,11 +182,31 @@ export class StripeService {
         }
     }
 
-    async createCustomer(email: string, name: string) {
+    async createCustomer(
+        email: string,
+        name: string,
+        opts: {
+            taxId?: string;
+            address?: { line1?: string; postal_code?: string; city?: string };
+        } = {},
+    ) {
         try {
             const customer = await this.stripe.customers.create({
                 email,
                 name,
+                ...(opts.address
+                    ? {
+                          address: {
+                              line1: opts.address.line1,
+                              postal_code: opts.address.postal_code,
+                              city: opts.address.city,
+                              country: 'PL',
+                          },
+                      }
+                    : {}),
+                ...(opts.taxId
+                    ? { tax_id_data: [{ type: 'eu_vat', value: `PL${opts.taxId}` }] }
+                    : {}),
             });
             return customer;
         } catch (error) {
@@ -245,6 +270,11 @@ export class StripeService {
                 await this.handleInvoicePaymentSucceeded(invoice, supabase);
                 break;
             }
+            case 'customer.subscription.updated': {
+                const subscription = event.data.object as Stripe.Subscription;
+                await this.handleSubscriptionUpdated(subscription, supabase);
+                break;
+            }
             case 'customer.subscription.deleted': {
                 const subscription = event.data.object as Stripe.Subscription;
                 await this.handleSubscriptionDeleted(subscription, supabase);
@@ -271,6 +301,25 @@ export class StripeService {
             .eq('stripe_subscription_id', subscriptionId);
 
         console.log(`Subscription renewed for subscription ${subscriptionId}`);
+    }
+
+    private async handleSubscriptionUpdated(subscription: Stripe.Subscription, supabase: any) {
+        const subData = subscription as any;
+
+        const updates: any = { status: subscription.status };
+        if (subData.current_period_start) {
+            updates.current_period_start = new Date(subData.current_period_start * 1000).toISOString();
+        }
+        if (subData.current_period_end) {
+            updates.current_period_end = new Date(subData.current_period_end * 1000).toISOString();
+        }
+
+        await supabase
+            .from('subscriptions')
+            .update(updates)
+            .eq('stripe_subscription_id', subscription.id);
+
+        console.log(`Subscription updated: ${subscription.id} -> ${subscription.status}`);
     }
 
     private async handleSubscriptionDeleted(subscription: Stripe.Subscription, supabase: any) {

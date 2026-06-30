@@ -28,8 +28,9 @@ export class SubscriptionService {
 
         if (!sub) return false; // No subscription = inactive
 
-        // Check status
-        if (sub.status === 'active' || sub.status === 'trialing') {
+        // Check status. 'pending_transfer' = firma wybrała przelew i ma dostęp na zaufanie
+        // (dział finansowy ustala wpłatę; super-admin aktywuje po zaksięgowaniu).
+        if (sub.status === 'active' || sub.status === 'trialing' || sub.status === 'pending_transfer') {
             return true;
         }
 
@@ -82,7 +83,7 @@ export class SubscriptionService {
     async checkLimits(companyId: string, limitKey: string, currentUsage: number): Promise<boolean> {
         const { status, plans: plan } = await this.getStatus(companyId);
 
-        if (status !== 'active' && status !== 'trialing') return false;
+        if (status !== 'active' && status !== 'trialing' && status !== 'pending_transfer') return false;
         if (!plan) return false;
 
         const limits = plan.limits || {};

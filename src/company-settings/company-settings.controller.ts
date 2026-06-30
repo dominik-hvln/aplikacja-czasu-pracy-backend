@@ -9,6 +9,19 @@ import { Roles, Role } from '../auth/roles.decorator';
 export class CompanySettingsController {
   constructor(private readonly companySettingsService: CompanySettingsService) {}
 
+  // WORK NORM SETTINGS
+  @Get('work-norms')
+  @Roles(Role.Admin, Role.Manager)
+  getWorkSettings(@Req() req) {
+    return this.companySettingsService.getWorkSettings(req.user.company_id);
+  }
+
+  @Patch('work-norms')
+  @Roles(Role.Admin)
+  updateWorkSettings(@Req() req, @Body() body: { daily_norm_hours?: number; count_holidays_as_work?: boolean }) {
+    return this.companySettingsService.updateWorkSettings(req.user.company_id, body);
+  }
+
   // DEPARTMENTS
   @Get('departments')
   @Roles(Role.Admin, Role.Manager, Role.Employee)

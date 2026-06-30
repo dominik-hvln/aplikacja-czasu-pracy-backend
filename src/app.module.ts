@@ -21,6 +21,8 @@ import { CompanySettingsModule } from './company-settings/company-settings.modul
 import { AbsencesModule } from './absences/absences.module';
 import { SchedulesModule } from './schedules/schedules.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { BillingModule } from './billing/billing.module';
+import { MailModule } from './mail/mail.module';
 
 @Module({
     imports: [
@@ -45,6 +47,8 @@ import { NotificationsModule } from './notifications/notifications.module';
         AbsencesModule,
         SchedulesModule,
         NotificationsModule,
+        MailModule,
+        BillingModule,
     ],
     controllers: [AppController],
     providers: [AppService],

@@ -4,9 +4,12 @@ import { CreateAbsenceDto, UpdateAbsenceStatusDto } from './dto/absence.dtos';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles, Role } from '../auth/roles.decorator';
+import { ModuleGuard } from '../auth/module.guard';
+import { RequiredModules } from '../auth/modules.decorator';
 
 @Controller('absences')
-@UseGuards(AuthGuard('jwt'), RolesGuard)
+@UseGuards(AuthGuard('jwt'), RolesGuard, ModuleGuard)
+@RequiredModules('absences')
 export class AbsencesController {
     constructor(private readonly absencesService: AbsencesService) {}
 

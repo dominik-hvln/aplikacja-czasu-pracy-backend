@@ -163,6 +163,33 @@ export class SuperAdminService {
         return { message: 'Użytkownik utworzony pomyślnie', userId: authUser.user.id };
     }
 
+    // --- APP SETTINGS ---
+
+    async getAppSettings() {
+        const supabase = this.supabaseService.getAdminClient();
+        const { data, error } = await supabase.from('app_settings').select('key, value');
+        if (error) throw new InternalServerErrorException(error.message);
+        const settings: Record<string, string | null> = {};
+        (data || []).forEach((row: any) => {
+            settings[row.key] = row.value;
+        });
+        return settings;
+    }
+
+    async updateAppSetting(key: string, value: string | null) {
+        const allowedKeys = ['finance_notification_email'];
+        if (!allowedKeys.includes(key)) {
+            throw new BadRequestException(`Nieobsługiwany klucz ustawienia: ${key}`);
+        }
+
+        const supabase = this.supabaseService.getAdminClient();
+        const { error } = await supabase
+            .from('app_settings')
+            .upsert({ key, value: value?.trim() || null, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+        if (error) throw new InternalServerErrorException(error.message);
+        return { key, value: value?.trim() || null };
+    }
+
     // --- PLANS ---
 
     async getPlans() {
@@ -380,6 +407,45 @@ export class SuperAdminService {
         await this.syncPlanModulesToCompany(companyId, planId);
 
         return { message: 'Plan assigned successfully' };
+    }
+
+    /**
+     * Aktywuje subskrypcję opłacaną przelewem po zaksięgowaniu wpłaty.
+     * Ustawia status 'active', odnawia okres i synchronizuje moduły z planu.
+     */
+    async activateTransferSubscription(companyId: string, periodDays = 30) {
+        const supabase = this.supabaseService.getAdminClient();
+
+        const { data: sub } = await supabase
+            .from('subscriptions')
+            .select('id, plan_id')
+            .eq('company_id', companyId)
+            .maybeSingle();
+
+        if (!sub) {
+            throw new BadRequestException('Firma nie ma subskrypcji do aktywacji.');
+        }
+
+        const periodEnd = new Date();
+        periodEnd.setDate(periodEnd.getDate() + periodDays);
+
+        const { error } = await supabase
+            .from('subscriptions')
+            .update({
+                status: 'active',
+                current_period_start: new Date().toISOString(),
+                current_period_end: periodEnd.toISOString(),
+                updated_at: new Date().toISOString(),
+            })
+            .eq('id', sub.id);
+
+        if (error) throw new InternalServerErrorException(`Nie udała się aktywacja: ${error.message}`);
+
+        if (sub.plan_id) {
+            await this.syncPlanModulesToCompany(companyId, sub.plan_id);
+        }
+
+        return { message: 'Subskrypcja aktywowana (przelew zaksięgowany)' };
     }
 
     async toggleModuleForCompany(companyId: string, moduleCode: string, isEnabled: boolean) {

@@ -51,6 +51,20 @@ export class SuperAdminController {
         return this.superAdminService.createUser(createUserDto);
     }
 
+    // --- APP SETTINGS ---
+
+    @Get('settings')
+    @Roles(Role.SuperAdmin)
+    getSettings() {
+        return this.superAdminService.getAppSettings();
+    }
+
+    @Put('settings')
+    @Roles(Role.SuperAdmin)
+    updateSetting(@Body() body: { key: string; value: string | null }) {
+        return this.superAdminService.updateAppSetting(body.key, body.value);
+    }
+
     // --- PLANS ---
 
     @Get('plans')
@@ -121,6 +135,12 @@ export class SuperAdminController {
     @Roles(Role.SuperAdmin)
     toggleModule(@Param('id') id: string, @Body() dto: ToggleModuleDto) {
         return this.superAdminService.toggleModuleForCompany(id, dto.moduleCode, dto.isEnabled);
+    }
+
+    @Post('companies/:id/activate-transfer')
+    @Roles(Role.SuperAdmin)
+    activateTransfer(@Param('id') id: string, @Body() body: { periodDays?: number }) {
+        return this.superAdminService.activateTransferSubscription(id, body?.periodDays);
     }
 
     // --- PLAN MODULES ---
