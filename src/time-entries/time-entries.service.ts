@@ -1,4 +1,5 @@
 import {
+    BadRequestException,
     Injectable,
     InternalServerErrorException,
     NotFoundException,
@@ -18,10 +19,49 @@ import {
     getAbsenceScheduleStatus,
     getScanConfirmCopy,
     getShiftDurationMinutes,
+    normalizeTimeStr,
     resolveScanAction,
+    splitDayNightMinutes,
+    DEFAULT_NIGHT_START,
+    DEFAULT_NIGHT_END,
 } from './time-entry.utils';
-import { differenceInMinutes, parseISO, eachDayOfInterval, getDay, format } from 'date-fns';
+import {
+    differenceInMinutes,
+    parseISO,
+    eachDayOfInterval,
+    endOfMonth,
+    getDay,
+    format,
+} from 'date-fns';
 import { HolidaysService } from '../schedules/holidays.service';
+
+interface TargetUser {
+    multiplier: number;
+    departmentId: string | null;
+    firstName: string;
+    lastName: string;
+}
+
+/** Oznaczenia dni bez pracy, które mimo to wliczają się do sumy godzin. */
+export type AbsenceCode = 'U' | 'NŻ' | 'L4' | 'I' | 'ŚW';
+
+const ABSENCE_CODES: Record<string, AbsenceCode> = {
+    urlop_wypoczynkowy: 'U',
+    urlop_na_zadanie: 'NŻ',
+    l4: 'L4',
+    inne: 'I',
+};
+
+export interface DailyCell {
+    /** Godziny przepracowane poza porą nocną (minuty). */
+    dayMinutes: number;
+    /** Godziny przepracowane w porze nocnej (minuty). */
+    nightMinutes: number;
+    /** Godziny doliczone z tytułu nieobecności lub święta (minuty). */
+    absenceMinutes: number;
+    /** Literka nieobecności/święta — null dla dnia przepracowanego. */
+    code: AbsenceCode | null;
+}
 
 @Injectable()
 export class TimeEntriesService {
@@ -399,6 +439,7 @@ export class TimeEntriesService {
         filters: { dateFrom?: string; dateTo?: string; userId?: string },
     ) {
         const entries = await this.findAllForCompany(companyId, filters);
+        const { fromDate, toDate } = buildStartTimeFilterRange(filters.dateFrom, filters.dateTo);
 
         const timeEntryMinutes = (entries || []).reduce((total, entry: any) => {
             if (!entry.end_time) return total;
@@ -408,100 +449,30 @@ export class TimeEntriesService {
             return total + (diff > 0 ? diff : 0);
         }, 0);
 
-        const supabase = this.supabaseService.getClient();
-        const { fromDate, toDate } = buildStartTimeFilterRange(filters.dateFrom, filters.dateTo);
-
-        // 1) Nieobecności z grafiku (gdy istnieje wiersz on_leave/sick_leave) — liczone wg zmiany
-        let scheduleQuery = supabase
-            .from('schedules')
-            .select('user_id, date, start_time, end_time, status')
-            .eq('company_id', companyId)
-            .in('status', ['on_leave', 'sick_leave']);
-
-        if (filters.userId) scheduleQuery = scheduleQuery.eq('user_id', filters.userId);
-        if (fromDate) scheduleQuery = scheduleQuery.gte('date', fromDate);
-        if (toDate) scheduleQuery = scheduleQuery.lte('date', toDate);
-
-        const { data: absenceSchedules, error } = await scheduleQuery;
-        if (error) throw new InternalServerErrorException(error.message);
-
-        const scheduleCovered = new Set<string>();
-        const scheduleAbsenceMinutes = (absenceSchedules || []).reduce((total, s: any) => {
-            scheduleCovered.add(`${s.user_id}|${s.date}`);
-            return total + getShiftDurationMinutes(s.start_time, s.end_time);
-        }, 0);
-
-        // 2) Nieobecności bez grafiku + święta — wg dni roboczych i godzin zmian
-        //    zdefiniowanych przez firmę (departments.schedule_settings), × etat (FTE).
-        let normAbsenceMinutes = 0;
-        let holidayMinutes = 0;
-
-        if (fromDate && toDate) {
-            const { data: company } = await supabase
-                .from('companies')
-                .select('daily_norm_hours, count_holidays_as_work')
-                .eq('id', companyId)
-                .maybeSingle();
-
-            // Norma dobowa = fallback, gdy dzień jest roboczy, ale nie ma zdefiniowanych godzin zmiany.
-            const fallbackMinutes = Math.round(Number(company?.daily_norm_hours ?? 8) * 60);
-            const countHolidays = company?.count_holidays_as_work !== false;
-
-            const targetUsers = await this.getTargetUsers(companyId, filters.userId);
-            const deptSettings = await this.getDeptSettingsMap(
-                [...new Set([...targetUsers.values()].map((u) => u.departmentId).filter(Boolean) as string[])],
-            );
-            const holidaySet = await this.getHolidaySet(companyId, fromDate, toDate);
-
-            // Zbiór dni nieobecności: `${userId}|${dateStr}`
-            let absQuery = supabase
-                .from('absences')
-                .select('user_id, start_date, end_date')
-                .eq('company_id', companyId)
-                .eq('status', 'approved')
-                .lte('start_date', toDate)
-                .gte('end_date', fromDate);
-            if (filters.userId) absQuery = absQuery.eq('user_id', filters.userId);
-            const { data: absences } = await absQuery;
-
-            const absenceDays = new Set<string>();
-            for (const a of absences || []) {
-                const start = a.start_date < fromDate ? fromDate : a.start_date;
-                const end = a.end_date > toDate ? toDate : a.end_date;
-                if (start > end) continue;
-                for (const d of eachDayOfInterval({ start: parseISO(start), end: parseISO(end) })) {
-                    absenceDays.add(`${a.user_id}|${format(d, 'yyyy-MM-dd')}`);
-                }
-            }
-
-            const days = eachDayOfInterval({ start: parseISO(fromDate), end: parseISO(toDate) });
-
-            for (const day of days) {
-                const dow = getDay(day); // 0 = niedziela ... 6 = sobota
-                const dateStr = format(day, 'yyyy-MM-dd');
-                const isHoliday = holidaySet.has(dateStr);
-
-                for (const [userId, u] of targetUsers) {
-                    // Oczekiwane minuty dla pracownika w tym dniu wg ustawień jego działu
-                    const expected = this.expectedMinutesForDay(deptSettings, u.departmentId, dow, fallbackMinutes);
-                    if (expected <= 0) continue; // nie jest to dzień roboczy dla tego pracownika
-
-                    const minutes = Math.round(expected * u.multiplier);
-
-                    if (isHoliday) {
-                        if (countHolidays) holidayMinutes += minutes;
-                        continue; // święto ma pierwszeństwo, nie doliczamy nieobecności
-                    }
-
-                    if (scheduleCovered.has(`${userId}|${dateStr}`)) continue; // policzone z grafiku
-                    if (absenceDays.has(`${userId}|${dateStr}`)) {
-                        normAbsenceMinutes += minutes;
-                    }
-                }
-            }
+        // Bez pełnego zakresu dat nie da się policzyć nieobecności i świąt.
+        if (!fromDate || !toDate) {
+            return {
+                timeEntryMinutes,
+                absenceMinutes: 0,
+                holidayMinutes: 0,
+                totalMinutes: timeEntryMinutes,
+            };
         }
 
-        const absenceMinutes = scheduleAbsenceMinutes + normAbsenceMinutes;
+        const { cells } = await this.computeDailyBreakdown(
+            companyId,
+            fromDate,
+            toDate,
+            filters.userId,
+            entries as any[],
+        );
+
+        let absenceMinutes = 0;
+        let holidayMinutes = 0;
+        for (const cell of cells.values()) {
+            if (cell.code === 'ŚW') holidayMinutes += cell.absenceMinutes;
+            else absenceMinutes += cell.absenceMinutes;
+        }
 
         return {
             timeEntryMinutes,
@@ -511,13 +482,303 @@ export class TimeEntriesService {
         };
     }
 
-    /** Mapa user_id -> { mnożnik etatu (FTE), departmentId }. Dla userId: tylko ta osoba; inaczej: pracownicy firmy. */
+    /**
+     * Rdzeń rozliczenia: dla każdego pracownika i każdego dnia zakresu wylicza
+     * godziny przepracowane (z podziałem dzień/noc) albo — gdy pracy nie było —
+     * godziny doliczone z tytułu nieobecności lub święta wraz z literką.
+     *
+     * Zasady:
+     *  - wpis rozliczany jest w całości w dniu ROZPOCZĘCIA (także zmiana przez północ),
+     *  - dzień przepracowany ma pierwszeństwo — nie dokładamy do niego godzin z urlopu,
+     *  - święto ma pierwszeństwo przed nieobecnością,
+     *  - godziny nieobecności: z grafiku (jeśli jest wiersz), inaczej wg zmian działu × etat.
+     *
+     * Wspólny dla podsumowania na ekranie i raportu miesięcznego, żeby obie liczby
+     * zawsze się zgadzały.
+     */
+    private async computeDailyBreakdown(
+        companyId: string,
+        fromDate: string,
+        toDate: string,
+        userId: string | undefined,
+        entries: any[],
+    ): Promise<{
+        users: Map<string, TargetUser>;
+        cells: Map<string, DailyCell>;
+        nightStart: string;
+        nightEnd: string;
+        countHolidays: boolean;
+    }> {
+        const supabase = this.supabaseService.getClient();
+
+        const { data: company } = await supabase
+            .from('companies')
+            .select('daily_norm_hours, count_holidays_as_work, night_start, night_end')
+            .eq('id', companyId)
+            .maybeSingle();
+
+        // Norma dobowa = fallback, gdy dzień jest roboczy, ale nie ma zdefiniowanych godzin zmiany.
+        const fallbackMinutes = Math.round(Number(company?.daily_norm_hours ?? 8) * 60);
+        const countHolidays = company?.count_holidays_as_work !== false;
+        const nightStart = normalizeTimeStr(company?.night_start || DEFAULT_NIGHT_START).substring(0, 5);
+        const nightEnd = normalizeTimeStr(company?.night_end || DEFAULT_NIGHT_END).substring(0, 5);
+
+        const users = await this.getTargetUsers(companyId, userId);
+        // Osoby spoza listy pracowników (np. manager), które mają wpisy — inaczej ich godziny zniknęłyby z raportu.
+        for (const entry of entries) {
+            const u = entry.user;
+            if (!u?.id || users.has(u.id)) continue;
+            users.set(u.id, {
+                multiplier: 1,
+                departmentId: null,
+                firstName: u.first_name || '',
+                lastName: u.last_name || '',
+            });
+        }
+
+        const deptSettings = await this.getDeptSettingsMap(
+            [...new Set([...users.values()].map((u) => u.departmentId).filter(Boolean) as string[])],
+        );
+        const holidaySet = await this.getHolidaySet(companyId, fromDate, toDate);
+
+        // 1) Godziny przepracowane, przypisane do dnia rozpoczęcia, z podziałem dzień/noc.
+        const worked = new Map<string, { dayMinutes: number; nightMinutes: number }>();
+        for (const entry of entries) {
+            if (!entry.end_time || !entry.user?.id) continue;
+            const split = splitDayNightMinutes(
+                parseISO(entry.start_time),
+                parseISO(entry.end_time),
+                nightStart,
+                nightEnd,
+            );
+            if (split.totalMinutes <= 0) continue;
+
+            const key = `${entry.user.id}|${eventDateStr(entry.start_time)}`;
+            const acc = worked.get(key) || { dayMinutes: 0, nightMinutes: 0 };
+            acc.dayMinutes += split.dayMinutes;
+            acc.nightMinutes += split.nightMinutes;
+            worked.set(key, acc);
+        }
+
+        // 2) Nieobecności wpisane w grafiku (mają własne godziny zmiany).
+        let scheduleQuery = supabase
+            .from('schedules')
+            .select('user_id, date, start_time, end_time, status')
+            .eq('company_id', companyId)
+            .in('status', ['on_leave', 'sick_leave'])
+            .gte('date', fromDate)
+            .lte('date', toDate);
+        if (userId) scheduleQuery = scheduleQuery.eq('user_id', userId);
+
+        const { data: absenceSchedules, error } = await scheduleQuery;
+        if (error) throw new InternalServerErrorException(error.message);
+
+        const scheduleAbsences = new Map<string, { status: string; minutes: number }>();
+        for (const s of absenceSchedules || []) {
+            scheduleAbsences.set(`${s.user_id}|${s.date}`, {
+                status: s.status,
+                minutes: getShiftDurationMinutes(s.start_time, s.end_time),
+            });
+        }
+
+        // 3) Zaakceptowane wnioski o nieobecność — dają literkę wg typu (U / NŻ / L4 / I).
+        let absQuery = supabase
+            .from('absences')
+            .select('user_id, start_date, end_date, type')
+            .eq('company_id', companyId)
+            .eq('status', 'approved')
+            .lte('start_date', toDate)
+            .gte('end_date', fromDate);
+        if (userId) absQuery = absQuery.eq('user_id', userId);
+        const { data: absences } = await absQuery;
+
+        const absenceTypes = new Map<string, string>();
+        for (const a of absences || []) {
+            const start = a.start_date < fromDate ? fromDate : a.start_date;
+            const end = a.end_date > toDate ? toDate : a.end_date;
+            if (start > end) continue;
+            for (const d of eachDayOfInterval({ start: parseISO(start), end: parseISO(end) })) {
+                absenceTypes.set(`${a.user_id}|${format(d, 'yyyy-MM-dd')}`, a.type);
+            }
+        }
+
+        // 4) Złożenie w siatkę pracownik × dzień.
+        const cells = new Map<string, DailyCell>();
+        const days = eachDayOfInterval({ start: parseISO(fromDate), end: parseISO(toDate) });
+
+        for (const day of days) {
+            const dow = getDay(day); // 0 = niedziela ... 6 = sobota
+            const dateStr = format(day, 'yyyy-MM-dd');
+            const isHoliday = holidaySet.has(dateStr);
+
+            for (const [uid, u] of users) {
+                const key = `${uid}|${dateStr}`;
+
+                const w = worked.get(key);
+                if (w) {
+                    cells.set(key, { ...w, absenceMinutes: 0, code: null });
+                    continue;
+                }
+
+                const expected = this.expectedMinutesForDay(deptSettings, u.departmentId, dow, fallbackMinutes);
+                const normMinutes = Math.round(expected * u.multiplier);
+
+                if (isHoliday) {
+                    // Święto ma pierwszeństwo; oznaczamy tylko dni, które byłyby robocze.
+                    if (normMinutes > 0) {
+                        cells.set(key, {
+                            dayMinutes: 0,
+                            nightMinutes: 0,
+                            absenceMinutes: countHolidays ? normMinutes : 0,
+                            code: 'ŚW',
+                        });
+                    }
+                    continue;
+                }
+
+                const absenceType = absenceTypes.get(key);
+                const scheduled = scheduleAbsences.get(key);
+
+                if (scheduled) {
+                    const code: AbsenceCode = absenceType
+                        ? (ABSENCE_CODES[absenceType] ?? 'I')
+                        : scheduled.status === 'sick_leave'
+                            ? 'L4'
+                            : 'U';
+                    cells.set(key, {
+                        dayMinutes: 0,
+                        nightMinutes: 0,
+                        absenceMinutes: scheduled.minutes,
+                        code,
+                    });
+                    continue;
+                }
+
+                if (absenceType && normMinutes > 0) {
+                    cells.set(key, {
+                        dayMinutes: 0,
+                        nightMinutes: 0,
+                        absenceMinutes: normMinutes,
+                        code: ABSENCE_CODES[absenceType] ?? 'I',
+                    });
+                }
+            }
+        }
+
+        return { users, cells, nightStart, nightEnd, countHolidays };
+    }
+
+    /**
+     * Raport miesięczny ewidencji: pracownik × dni miesiąca, w każdym dniu godziny
+     * dzienne i nocne albo literka nieobecności/święta. Podstawa eksportu CSV/PDF.
+     */
+    async getMonthlyReport(
+        companyId: string,
+        params: { year: number; month: number; userId?: string },
+    ) {
+        const year = Number(params.year);
+        const month = Number(params.month);
+        if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+            throw new BadRequestException('Nieprawidłowy rok.');
+        }
+        if (!Number.isInteger(month) || month < 1 || month > 12) {
+            throw new BadRequestException('Nieprawidłowy miesiąc (1–12).');
+        }
+
+        const fromDate = `${year}-${String(month).padStart(2, '0')}-01`;
+        const toDate = format(endOfMonth(parseISO(fromDate)), 'yyyy-MM-dd');
+
+        const entries = await this.findAllForCompany(companyId, {
+            dateFrom: fromDate,
+            dateTo: toDate,
+            userId: params.userId,
+        });
+
+        const { users, cells, nightStart, nightEnd, countHolidays } = await this.computeDailyBreakdown(
+            companyId,
+            fromDate,
+            toDate,
+            params.userId,
+            (entries || []) as any[],
+        );
+
+        const holidaySet = await this.getHolidaySet(companyId, fromDate, toDate);
+        const days = eachDayOfInterval({ start: parseISO(fromDate), end: parseISO(toDate) }).map((d) => {
+            const dateStr = format(d, 'yyyy-MM-dd');
+            const dow = getDay(d);
+            return {
+                date: dateStr,
+                day: Number(format(d, 'd')),
+                weekday: dow,
+                isWeekend: dow === 0 || dow === 6,
+                isHoliday: holidaySet.has(dateStr),
+            };
+        });
+
+        const rows = [...users.entries()]
+            .map(([userId, u]) => {
+                const rowCells: Record<string, DailyCell> = {};
+                const totals = {
+                    dayMinutes: 0,
+                    nightMinutes: 0,
+                    workedMinutes: 0,
+                    absenceMinutes: 0,
+                    holidayMinutes: 0,
+                    totalMinutes: 0,
+                    vacationDays: 0,
+                    sickDays: 0,
+                    otherAbsenceDays: 0,
+                    holidayDays: 0,
+                };
+
+                for (const day of days) {
+                    const cell = cells.get(`${userId}|${day.date}`);
+                    if (!cell) continue;
+                    rowCells[day.date] = cell;
+
+                    totals.dayMinutes += cell.dayMinutes;
+                    totals.nightMinutes += cell.nightMinutes;
+
+                    if (cell.code === 'ŚW') {
+                        totals.holidayMinutes += cell.absenceMinutes;
+                        totals.holidayDays += 1;
+                    } else if (cell.code) {
+                        totals.absenceMinutes += cell.absenceMinutes;
+                        if (cell.code === 'U' || cell.code === 'NŻ') totals.vacationDays += 1;
+                        else if (cell.code === 'L4') totals.sickDays += 1;
+                        else totals.otherAbsenceDays += 1;
+                    }
+                }
+
+                totals.workedMinutes = totals.dayMinutes + totals.nightMinutes;
+                totals.totalMinutes =
+                    totals.workedMinutes + totals.absenceMinutes + totals.holidayMinutes;
+
+                return {
+                    userId,
+                    firstName: u.firstName,
+                    lastName: u.lastName,
+                    cells: rowCells,
+                    totals,
+                };
+            })
+            .sort((a, b) =>
+                `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`, 'pl'),
+            );
+
+        return { year, month, fromDate, toDate, nightStart, nightEnd, countHolidays, days, rows };
+    }
+
+    /** Mapa user_id -> { mnożnik etatu (FTE), departmentId, imię i nazwisko }. Dla userId: tylko ta osoba; inaczej: pracownicy firmy. */
     private async getTargetUsers(
         companyId: string,
         userId?: string,
-    ): Promise<Map<string, { multiplier: number; departmentId: string | null }>> {
+    ): Promise<Map<string, TargetUser>> {
         const supabase = this.supabaseService.getClient();
-        let q = supabase.from('users').select('id, fte_id, department_id, status').eq('company_id', companyId);
+        let q = supabase
+            .from('users')
+            .select('id, fte_id, department_id, status, first_name, last_name')
+            .eq('company_id', companyId);
         if (userId) q = q.eq('id', userId);
         else q = q.eq('role', 'employee');
 
@@ -536,11 +797,13 @@ export class TimeEntriesService {
             (ftes || []).forEach((f: any) => fteMap.set(f.id, Number(f.multiplier) || 1));
         }
 
-        const map = new Map<string, { multiplier: number; departmentId: string | null }>();
+        const map = new Map<string, TargetUser>();
         activeUsers.forEach((u: any) => {
             map.set(u.id, {
                 multiplier: u.fte_id && fteMap.has(u.fte_id) ? fteMap.get(u.fte_id)! : 1,
                 departmentId: u.department_id || null,
+                firstName: u.first_name || '',
+                lastName: u.last_name || '',
             });
         });
         return map;

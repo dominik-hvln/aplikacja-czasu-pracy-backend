@@ -56,6 +56,26 @@ export class TimeEntriesController {
         return this.timeEntriesService.getSummary(companyId, { dateFrom, dateTo, userId });
     }
 
+    /** Raport miesięczny ewidencji (siatka pracownik × dni) — podstawa eksportu CSV/PDF. */
+    @Get('monthly-report')
+    @Roles(Role.Admin, Role.Manager, Role.Employee)
+    getMonthlyReport(
+        @Req() req,
+        @Query('year') year: string,
+        @Query('month') month: string,
+        @Query('userId') userId?: string,
+    ) {
+        const companyId = req.user.company_id;
+        if (req.user.role === Role.Employee) {
+            userId = req.user.id;
+        }
+        return this.timeEntriesService.getMonthlyReport(companyId, {
+            year: Number(year),
+            month: Number(month),
+            userId,
+        });
+    }
+
     @Get()
     @Roles(Role.Admin, Role.Manager, Role.Employee)
     findAll(

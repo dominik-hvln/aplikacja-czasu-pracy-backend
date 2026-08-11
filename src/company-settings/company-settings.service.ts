@@ -1,5 +1,16 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import {
+    DEFAULT_NIGHT_END,
+    DEFAULT_NIGHT_START,
+    normalizeTimeStr,
+} from '../time-entries/time-entry.utils';
+
+/** "22:00:00" / "22:00" -> "22:00" (format używany przez <input type="time">). */
+function toHHmm(value: unknown, fallback: string): string {
+    if (typeof value !== 'string' || !value.trim()) return fallback;
+    return normalizeTimeStr(value).substring(0, 5);
+}
 
 @Injectable()
 export class CompanySettingsService {
@@ -10,19 +21,26 @@ export class CompanySettingsService {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
             .from('companies')
-            .select('daily_norm_hours, count_holidays_as_work')
+            .select('daily_norm_hours, count_holidays_as_work, night_start, night_end')
             .eq('id', companyId)
             .maybeSingle();
         if (error) throw new InternalServerErrorException(error.message);
         return {
             daily_norm_hours: Number(data?.daily_norm_hours ?? 8),
             count_holidays_as_work: data?.count_holidays_as_work !== false,
+            night_start: toHHmm(data?.night_start, DEFAULT_NIGHT_START),
+            night_end: toHHmm(data?.night_end, DEFAULT_NIGHT_END),
         };
     }
 
     async updateWorkSettings(
         companyId: string,
-        dto: { daily_norm_hours?: number; count_holidays_as_work?: boolean },
+        dto: {
+            daily_norm_hours?: number;
+            count_holidays_as_work?: boolean;
+            night_start?: string;
+            night_end?: string;
+        },
     ) {
         const updates: any = {};
         if (dto.daily_norm_hours !== undefined) {
@@ -34,6 +52,24 @@ export class CompanySettingsService {
         }
         if (dto.count_holidays_as_work !== undefined) {
             updates.count_holidays_as_work = Boolean(dto.count_holidays_as_work);
+        }
+
+        const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/;
+        for (const field of ['night_start', 'night_end'] as const) {
+            const raw = dto[field];
+            if (raw === undefined) continue;
+            const value = toHHmm(raw, '');
+            if (!timeRe.test(value)) {
+                throw new BadRequestException('Pora nocna musi być w formacie GG:MM (np. 22:00).');
+            }
+            updates[field] = `${value}:00`;
+        }
+
+        const current = await this.getWorkSettings(companyId);
+        const nextStart = updates.night_start ? updates.night_start.substring(0, 5) : current.night_start;
+        const nextEnd = updates.night_end ? updates.night_end.substring(0, 5) : current.night_end;
+        if (nextStart === nextEnd) {
+            throw new BadRequestException('Początek i koniec pory nocnej nie mogą być takie same.');
         }
 
         const supabase = this.supabaseService.getClient();

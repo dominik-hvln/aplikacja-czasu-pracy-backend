@@ -18,7 +18,15 @@ export class CompanySettingsController {
 
   @Patch('work-norms')
   @Roles(Role.Admin)
-  updateWorkSettings(@Req() req, @Body() body: { daily_norm_hours?: number; count_holidays_as_work?: boolean }) {
+  updateWorkSettings(
+    @Req() req,
+    @Body() body: {
+      daily_norm_hours?: number;
+      count_holidays_as_work?: boolean;
+      night_start?: string;
+      night_end?: string;
+    },
+  ) {
     return this.companySettingsService.updateWorkSettings(req.user.company_id, body);
   }
 
