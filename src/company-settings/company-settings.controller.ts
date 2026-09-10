@@ -23,6 +23,7 @@ export class CompanySettingsController {
     @Body() body: {
       daily_norm_hours?: number;
       count_holidays_as_work?: boolean;
+      schedule_on_holidays?: boolean;
       night_start?: string;
       night_end?: string;
     },

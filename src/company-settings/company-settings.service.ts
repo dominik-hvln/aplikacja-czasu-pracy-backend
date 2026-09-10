@@ -21,13 +21,16 @@ export class CompanySettingsService {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
             .from('companies')
-            .select('daily_norm_hours, count_holidays_as_work, night_start, night_end')
+            .select('daily_norm_hours, count_holidays_as_work, schedule_on_holidays, night_start, night_end')
             .eq('id', companyId)
             .maybeSingle();
         if (error) throw new InternalServerErrorException(error.message);
         return {
             daily_norm_hours: Number(data?.daily_norm_hours ?? 8),
             count_holidays_as_work: data?.count_holidays_as_work !== false,
+            // Domyślnie false — grafik pomija święta (dotychczasowe zachowanie).
+            // Firmy pracujące 365 dni w roku (hotele, gastronomia) włączają tę opcję.
+            schedule_on_holidays: data?.schedule_on_holidays === true,
             night_start: toHHmm(data?.night_start, DEFAULT_NIGHT_START),
             night_end: toHHmm(data?.night_end, DEFAULT_NIGHT_END),
         };
@@ -38,6 +41,7 @@ export class CompanySettingsService {
         dto: {
             daily_norm_hours?: number;
             count_holidays_as_work?: boolean;
+            schedule_on_holidays?: boolean;
             night_start?: string;
             night_end?: string;
         },
@@ -52,6 +56,9 @@ export class CompanySettingsService {
         }
         if (dto.count_holidays_as_work !== undefined) {
             updates.count_holidays_as_work = Boolean(dto.count_holidays_as_work);
+        }
+        if (dto.schedule_on_holidays !== undefined) {
+            updates.schedule_on_holidays = Boolean(dto.schedule_on_holidays);
         }
 
         const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/;

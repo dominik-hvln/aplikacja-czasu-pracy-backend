@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { HolidaysService } from './holidays.service';
 import { GenerateScheduleDto, UpdateScheduleDto, UpdateSettingsDto, CreateShiftRequestDto, UpdateShiftRequestStatusDto, CreateScheduleDto } from './dto/schedule.dtos';
@@ -7,6 +7,8 @@ import { getAbsenceScheduleStatus } from '../time-entries/time-entry.utils';
 
 @Injectable()
 export class SchedulesService {
+    private readonly logger = new Logger(SchedulesService.name);
+
     constructor(
         private readonly supabaseService: SupabaseService,
         private readonly holidaysService: HolidaysService
@@ -206,6 +208,18 @@ export class SchedulesService {
         // Load holidays
         const mergedHolidays = await this.getMergedHolidays(companyId, departmentId, year, month);
 
+        // Czy firma pracuje w święta? Hotele/gastronomia działają 365 dni w roku,
+        // więc pomijanie świąt musi być decyzją firmy, a nie regułą wpisaną na sztywno.
+        const { data: company, error: companyErr } = await supabase
+            .from('companies')
+            .select('schedule_on_holidays')
+            .eq('id', companyId)
+            .maybeSingle();
+
+        if (companyErr) throw new InternalServerErrorException(companyErr.message);
+
+        const scheduleOnHolidays = company?.schedule_on_holidays === true;
+
         // Divide employees into groups based on max shifts available in the week to balance them
         // First gather all unique shifts in the settings
         const allShiftNames = new Set<string>();
@@ -273,9 +287,9 @@ export class SchedulesService {
                      dateStr >= a.start_date && dateStr <= a.end_date
                  );
 
-                 // Check for holidays
+                 // Check for holidays — pomijamy tylko wtedy, gdy firma nie pracuje w święta
                  const isHoliday = mergedHolidays.find(h => h.date === dateStr);
-                 if (isHoliday) {
+                 if (isHoliday && !scheduleOnHolidays) {
                      continue;
                  }
 
@@ -337,9 +351,21 @@ export class SchedulesService {
             .lte('date', absence.end_date);
 
         if (error) throw new InternalServerErrorException(error.message);
-        if (!schedules || schedules.length === 0) return { updated: 0 };
+
+        // Brak wierszy grafiku w tym zakresie = nie ma czego oznaczyć jako urlop.
+        // Najczęstsza przyczyna: grafik na ten miesiąc nie został jeszcze wygenerowany
+        // albo dni wypadają w święto przy wyłączonej opcji pracy w święta.
+        if (!schedules || schedules.length === 0) {
+            this.logger.warn(
+                `Zaakceptowana nieobecność (user=${absence.user_id}, ${absence.start_date}..${absence.end_date}) ` +
+                `nie została naniesiona na grafik — brak wpisów grafiku w tym zakresie dat.`,
+            );
+            return { matched: 0, updated: 0 };
+        }
 
         let updated = 0;
+        const failures: string[] = [];
+
         for (const schedule of schedules) {
             const referenceTs = schedule.generated_at || schedule.created_at;
             const requiresReplacement = referenceTs
@@ -354,10 +380,22 @@ export class SchedulesService {
                 })
                 .eq('id', schedule.id);
 
-            if (!updateErr) updated++;
+            if (updateErr) {
+                failures.push(`${schedule.date}: ${updateErr.message}`);
+            } else {
+                updated++;
+            }
         }
 
-        return { updated };
+        // Wcześniej błędy aktualizacji były połykane po cichu — urlop po prostu
+        // nie pojawiał się na grafiku i nie zostawiał po sobie żadnego śladu.
+        if (failures.length > 0) {
+            throw new InternalServerErrorException(
+                `Nie udało się nanieść urlopu na grafik (${failures.length} z ${schedules.length} dni): ${failures.join('; ')}`,
+            );
+        }
+
+        return { matched: schedules.length, updated };
     }
 
     async updateSchedule(id: string, companyId: string, updateDto: UpdateScheduleDto) {
