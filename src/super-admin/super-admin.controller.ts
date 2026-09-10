@@ -1,10 +1,11 @@
-import { Controller, Get, Post, Body, UseGuards, Query, Put, Delete, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Query, Put, Patch, Delete, Param } from '@nestjs/common';
 import { SuperAdminService } from './super-admin.service';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles, Role } from '../auth/roles.decorator';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { CreateSystemUserDto } from './dto/create-user.dto';
+import { UpdateSystemUserDto } from './dto/update-user.dto';
 import { CreatePlanDto } from './dto/create-plan.dto';
 import { CreateModuleDto } from './dto/create-module.dto';
 import { AssignPlanDto } from './dto/assign-plan.dto';
@@ -21,6 +22,18 @@ export class SuperAdminController {
         return this.superAdminService.getStats();
     }
 
+    @Get('stats/company-growth')
+    @Roles(Role.SuperAdmin)
+    getCompanyGrowth(@Query('months') months?: string) {
+        return this.superAdminService.getCompanyGrowth(months ? Number(months) : 12);
+    }
+
+    @Get('stats/recent-logins')
+    @Roles(Role.SuperAdmin)
+    getRecentLogins(@Query('limit') limit?: string) {
+        return this.superAdminService.getRecentLogins(limit ? Number(limit) : 8);
+    }
+
     @Get('companies')
     @Roles(Role.SuperAdmin)
     getAllCompanies() {
@@ -33,10 +46,22 @@ export class SuperAdminController {
         return this.superAdminService.getCompany(id);
     }
 
+    @Get('companies/:id/users')
+    @Roles(Role.SuperAdmin)
+    getCompanyUsers(@Param('id') id: string) {
+        return this.superAdminService.getCompanyUsers(id);
+    }
+
     @Get('users')
     @Roles(Role.SuperAdmin)
     getAllUsers() {
         return this.superAdminService.getAllUsers();
+    }
+
+    @Patch('users/:id')
+    @Roles(Role.SuperAdmin)
+    updateUser(@Param('id') id: string, @Body() dto: UpdateSystemUserDto) {
+        return this.superAdminService.updateUser(id, dto);
     }
 
     @Post('users/:id/status')

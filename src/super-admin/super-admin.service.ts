@@ -119,6 +119,176 @@ export class SuperAdminService {
         }));
     }
 
+    /** Edycja danych użytkownika z poziomu panelu super admina. */
+    async updateUser(
+        userId: string,
+        dto: { firstName?: string; lastName?: string; role?: string; companyId?: string | null },
+    ) {
+        const admin = this.supabaseService.getAdminClient();
+
+        const { data: user, error: fetchError } = await admin
+            .from('users')
+            .select('id, role, archived_at')
+            .eq('id', userId)
+            .maybeSingle();
+
+        if (fetchError) throw new InternalServerErrorException(fetchError.message);
+        if (!user) throw new NotFoundException('Nie znaleziono użytkownika.');
+
+        if (user.archived_at) {
+            throw new BadRequestException('Nie można edytować zarchiwizowanego pracownika.');
+        }
+
+        const updates: Record<string, any> = {};
+        if (dto.firstName !== undefined) updates.first_name = dto.firstName;
+        if (dto.lastName !== undefined) updates.last_name = dto.lastName;
+        if (dto.role !== undefined) updates.role = dto.role;
+        if (dto.companyId !== undefined) updates.company_id = dto.companyId;
+
+        // Super admin działa globalnie i nie należy do żadnej firmy.
+        if (updates.role === 'super_admin') {
+            updates.company_id = null;
+        } else if (updates.role && updates.role !== 'super_admin' && updates.company_id === undefined) {
+            const { data: current } = await admin
+                .from('users')
+                .select('company_id')
+                .eq('id', userId)
+                .maybeSingle();
+            if (!current?.company_id) {
+                throw new BadRequestException(
+                    'Użytkownik w roli innej niż super admin musi być przypisany do firmy.',
+                );
+            }
+        }
+
+        if (Object.keys(updates).length === 0) {
+            throw new BadRequestException('Brak danych do zapisania.');
+        }
+
+        // Odebranie ostatniej roli super admina odcięłoby dostęp do panelu.
+        if (user.role === 'super_admin' && updates.role && updates.role !== 'super_admin') {
+            const { count, error: countError } = await admin
+                .from('users')
+                .select('*', { count: 'exact', head: true })
+                .eq('role', 'super_admin')
+                .is('archived_at', null);
+
+            if (countError) throw new InternalServerErrorException(countError.message);
+            if ((count || 0) <= 1) {
+                throw new BadRequestException('Nie można odebrać roli jedynemu super adminowi.');
+            }
+        }
+
+        const { data, error } = await admin
+            .from('users')
+            .update(updates)
+            .eq('id', userId)
+            .select('id, email, first_name, last_name, role, company_id')
+            .single();
+
+        if (error) throw new InternalServerErrorException(error.message);
+        return data;
+    }
+
+    /** Przyrost firm w ostatnich `months` miesiącach — dane pod wykres na pulpicie. */
+    async getCompanyGrowth(months = 12) {
+        const supabase = this.supabaseService.getClient();
+
+        const start = new Date();
+        start.setDate(1);
+        start.setHours(0, 0, 0, 0);
+        start.setMonth(start.getMonth() - (months - 1));
+
+        const { data, error } = await supabase
+            .from('companies')
+            .select('created_at')
+            .gte('created_at', start.toISOString());
+
+        if (error) throw new InternalServerErrorException(error.message);
+
+        const buckets = new Map<string, number>();
+        for (let i = 0; i < months; i++) {
+            const d = new Date(start);
+            d.setMonth(start.getMonth() + i);
+            buckets.set(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, 0);
+        }
+
+        for (const row of data || []) {
+            const d = new Date(row.created_at);
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            if (buckets.has(key)) buckets.set(key, (buckets.get(key) || 0) + 1);
+        }
+
+        let running = 0;
+        return [...buckets.entries()].map(([month, count]) => {
+            running += count;
+            return { month, count, cumulative: running };
+        });
+    }
+
+    /**
+     * Ostatnie logowania. Data ostatniego logowania żyje w auth.users, więc
+     * czytamy ją przez Admin API i łączymy z profilami z public.users.
+     */
+    async getRecentLogins(limit = 8) {
+        const admin = this.supabaseService.getAdminClient();
+
+        const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+        if (error) throw new InternalServerErrorException(error.message);
+
+        const signedIn = (data?.users || [])
+            .filter((u: any) => u.last_sign_in_at)
+            .sort(
+                (a: any, b: any) =>
+                    new Date(b.last_sign_in_at).getTime() - new Date(a.last_sign_in_at).getTime(),
+            )
+            .slice(0, limit);
+
+        if (signedIn.length === 0) return [];
+
+        const { data: profiles } = await admin
+            .from('users')
+            .select('id, first_name, last_name, role, company_id')
+            .in('id', signedIn.map((u: any) => u.id));
+
+        const { data: companies } = await admin.from('companies').select('id, name');
+        const companyName = new Map((companies || []).map((c: any) => [c.id, c.name]));
+        const profileById = new Map((profiles || []).map((p: any) => [p.id, p]));
+
+        return signedIn.map((u: any) => {
+            const profile = profileById.get(u.id);
+            return {
+                id: u.id,
+                email: u.email,
+                last_sign_in_at: u.last_sign_in_at,
+                first_name: profile?.first_name || null,
+                last_name: profile?.last_name || null,
+                role: profile?.role || null,
+                company_name: profile?.company_id ? companyName.get(profile.company_id) || null : null,
+            };
+        });
+    }
+
+    /** Pracownicy firmy z podziałem na aktywnych i zarchiwizowanych. */
+    async getCompanyUsers(companyId: string) {
+        const supabase = this.supabaseService.getClient();
+
+        const { data, error } = await supabase
+            .from('users')
+            .select('id, email, first_name, last_name, role, status, archived_at, created_at')
+            .eq('company_id', companyId)
+            .order('archived_at', { ascending: true, nullsFirst: true })
+            .order('last_name', { ascending: true });
+
+        if (error) throw new InternalServerErrorException(error.message);
+
+        const users = data || [];
+        return {
+            active: users.filter((u: any) => !u.archived_at),
+            archived: users.filter((u: any) => u.archived_at),
+        };
+    }
+
     /** Aktywuje/dezaktywuje użytkownika (ban w Auth + status w profilu). */
     async setUserActive(userId: string, active: boolean) {
         const admin = this.supabaseService.getAdminClient();
