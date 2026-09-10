@@ -148,7 +148,8 @@ export class SchedulesService {
             .select('id, role')
             .eq('company_id', companyId)
             .eq('department_id', departmentId)
-            .eq('role', 'employee'); // only employee roles get schedules generated
+            .eq('role', 'employee') // only employee roles get schedules generated
+            .is('archived_at', null); // zarchiwizowanym nie układamy nowych zmian
 
         if (usersErr) throw new InternalServerErrorException(usersErr.message);
         
@@ -396,6 +397,62 @@ export class SchedulesService {
         }
 
         return { matched: schedules.length, updated };
+    }
+
+    /**
+     * Odwrotność applyApprovedAbsence: gdy zaakceptowany wniosek zostaje usunięty,
+     * pozycje grafiku muszą wrócić do zwykłej zmiany. Bez tego pracownik miałby
+     * na grafiku "URLOP" mimo braku urlopu.
+     *
+     * Dni pokryte innym, wciąż zaakceptowanym wnioskiem zostają nietknięte.
+     */
+    async revertAbsenceFromSchedule(
+        companyId: string,
+        absence: { id: string; user_id: string; start_date: string; end_date: string },
+    ) {
+        const supabase = this.supabaseService.getClient();
+
+        const { data: otherAbsences, error: othersError } = await supabase
+            .from('absences')
+            .select('start_date, end_date')
+            .eq('company_id', companyId)
+            .eq('user_id', absence.user_id)
+            .eq('status', 'approved')
+            .neq('id', absence.id)
+            .lte('start_date', absence.end_date)
+            .gte('end_date', absence.start_date);
+
+        if (othersError) throw new InternalServerErrorException(othersError.message);
+
+        const { data: schedules, error } = await supabase
+            .from('schedules')
+            .select('id, date, status')
+            .eq('company_id', companyId)
+            .eq('user_id', absence.user_id)
+            .gte('date', absence.start_date)
+            .lte('date', absence.end_date)
+            .in('status', ['on_leave', 'sick_leave']);
+
+        if (error) throw new InternalServerErrorException(error.message);
+        if (!schedules || schedules.length === 0) return { reverted: 0 };
+
+        const stillCovered = (date: string) =>
+            (otherAbsences || []).some((a) => date >= a.start_date && date <= a.end_date);
+
+        const idsToRevert = schedules
+            .filter((s) => !stillCovered(s.date))
+            .map((s) => s.id);
+
+        if (idsToRevert.length === 0) return { reverted: 0 };
+
+        const { error: updateError } = await supabase
+            .from('schedules')
+            .update({ status: 'scheduled', requires_replacement: false })
+            .in('id', idsToRevert);
+
+        if (updateError) throw new InternalServerErrorException(updateError.message);
+
+        return { reverted: idsToRevert.length };
     }
 
     async updateSchedule(id: string, companyId: string, updateDto: UpdateScheduleDto) {

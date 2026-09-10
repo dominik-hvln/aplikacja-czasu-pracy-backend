@@ -24,7 +24,8 @@ export class DashboardService {
             supabase
                 .from('users')
                 .select('id', { count: 'exact', head: true })
-                .eq('company_id', companyId),
+                .eq('company_id', companyId)
+                .is('archived_at', null),
             // Pobieranie 3 ostatnich zleceń
             supabase
                 .from('tasks')

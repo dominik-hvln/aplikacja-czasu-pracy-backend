@@ -137,7 +137,18 @@ export class AbsencesService {
 
         const { error } = await supabase.from('absences').delete().eq('id', id);
         if (error) throw new InternalServerErrorException(error.message);
-        
+
+        // Zaakceptowany wniosek zdążył już oznaczyć pozycje grafiku jako urlop -
+        // po jego usunięciu muszą wrócić do zwykłej zmiany.
+        if (absence.status === 'approved') {
+            await this.schedulesService.revertAbsenceFromSchedule(absence.company_id, {
+                id: absence.id,
+                user_id: absence.user_id,
+                start_date: absence.start_date,
+                end_date: absence.end_date,
+            });
+        }
+
         return { success: true };
     }
 }
