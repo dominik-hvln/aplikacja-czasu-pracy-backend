@@ -58,6 +58,12 @@ export class SuperAdminController {
         return this.superAdminService.getAllUsers();
     }
 
+    @Get('users/:id/logins')
+    @Roles(Role.SuperAdmin)
+    getUserLoginHistory(@Param('id') id: string, @Query('limit') limit?: string) {
+        return this.superAdminService.getUserLoginHistory(id, limit ? Number(limit) : 50);
+    }
+
     @Patch('users/:id')
     @Roles(Role.SuperAdmin)
     updateUser(@Param('id') id: string, @Body() dto: UpdateSystemUserDto) {

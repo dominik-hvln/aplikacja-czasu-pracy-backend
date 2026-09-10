@@ -17,8 +17,17 @@ export class AuthController {
     }
 
     @Post('login')
-    async login(@Body() loginDto: LoginDto) {
-        return this.authService.login(loginDto);
+    async login(@Body() loginDto: LoginDto, @Req() req) {
+        // Za proxy/load balancerem prawdziwy adres siedzi w X-Forwarded-For.
+        const forwarded = req.headers['x-forwarded-for'];
+        const ipAddress = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim()
+            || req.ip
+            || null;
+
+        return this.authService.login(loginDto, {
+            ipAddress,
+            userAgent: req.headers['user-agent'],
+        });
     }
 
     @Get('me')

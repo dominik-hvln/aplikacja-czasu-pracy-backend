@@ -173,7 +173,35 @@ export class AuthService {
     }
 
     // === LOGOWANIE ===
-    async login(loginDto: LoginDto) {
+    /**
+     * Zapisuje udane logowanie. Świadomie nie rzuca wyjątkiem - problem
+     * z zapisem audytu nie może zablokować użytkownikowi wejścia do aplikacji.
+     */
+    private async recordLoginEvent(params: {
+        userId: string;
+        companyId?: string | null;
+        email?: string | null;
+        ipAddress?: string | null;
+        userAgent?: string | null;
+    }) {
+        try {
+            const admin = this.supabaseService.getAdminClient();
+            const { error } = await admin.from('login_events').insert({
+                user_id: params.userId,
+                company_id: params.companyId ?? null,
+                email: params.email ?? null,
+                ip_address: params.ipAddress ?? null,
+                user_agent: params.userAgent ? params.userAgent.slice(0, 500) : null,
+            });
+            if (error) {
+                this.logger.warn(`Nie zapisano zdarzenia logowania: ${error.message}`);
+            }
+        } catch (e: any) {
+            this.logger.warn(`Nie zapisano zdarzenia logowania: ${e?.message}`);
+        }
+    }
+
+    async login(loginDto: LoginDto, context?: { ipAddress?: string; userAgent?: string }) {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase.auth.signInWithPassword({
             email: loginDto.email,
@@ -193,6 +221,14 @@ export class AuthService {
         if (profileError) throw new InternalServerErrorException(profileError.message);
 
         const enriched = await this.enrichProfile(supabase, profile);
+
+        await this.recordLoginEvent({
+            userId: data.user.id,
+            companyId: profile?.company_id,
+            email: profile?.email || loginDto.email,
+            ipAddress: context?.ipAddress,
+            userAgent: context?.userAgent,
+        });
 
         return { session: data.session, profile: enriched };
     }

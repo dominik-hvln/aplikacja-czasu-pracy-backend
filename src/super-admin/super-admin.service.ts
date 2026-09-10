@@ -269,6 +269,64 @@ export class SuperAdminService {
         });
     }
 
+    /**
+     * Historia logowań jednego konta.
+     *
+     * Uwaga na granicę tej funkcji: system rejestruje KONTO, nie człowieka.
+     * Jeżeli kilka osób korzysta z jednego loginu, nie da się ich rozróżnić -
+     * jedynym sygnałem współdzielenia są różne adresy IP i urządzenia,
+     * dlatego zliczamy je osobno.
+     */
+    async getUserLoginHistory(userId: string, limit = 50) {
+        const admin = this.supabaseService.getAdminClient();
+
+        const { data: user, error: userError } = await admin
+            .from('users')
+            .select('id, email, first_name, last_name, company_id')
+            .eq('id', userId)
+            .maybeSingle();
+
+        if (userError) throw new InternalServerErrorException(userError.message);
+        if (!user) throw new NotFoundException('Nie znaleziono użytkownika.');
+
+        const { data: events, error } = await admin
+            .from('login_events')
+            .select('id, created_at, ip_address, user_agent')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(limit);
+
+        if (error) throw new InternalServerErrorException(error.message);
+
+        // last_sign_in_at z Auth działa od zawsze, nasza tabela dopiero od wdrożenia.
+        let lastSignInAt: string | null = null;
+        try {
+            const { data: authUser } = await admin.auth.admin.getUserById(userId);
+            lastSignInAt = (authUser?.user as any)?.last_sign_in_at || null;
+        } catch {
+            lastSignInAt = null;
+        }
+
+        const rows = events || [];
+        const distinctIps = new Set(rows.map((e: any) => e.ip_address).filter(Boolean));
+        const distinctAgents = new Set(rows.map((e: any) => e.user_agent).filter(Boolean));
+
+        return {
+            user: {
+                id: user.id,
+                email: user.email,
+                name: [user.first_name, user.last_name].filter(Boolean).join(' ') || null,
+            },
+            lastSignInAt,
+            events: rows,
+            summary: {
+                total: rows.length,
+                distinctIps: distinctIps.size,
+                distinctDevices: distinctAgents.size,
+            },
+        };
+    }
+
     /** Pracownicy firmy z podziałem na aktywnych i zarchiwizowanych. */
     async getCompanyUsers(companyId: string) {
         const supabase = this.supabaseService.getClient();
