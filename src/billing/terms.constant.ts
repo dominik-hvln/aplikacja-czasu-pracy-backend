@@ -4,4 +4,4 @@
  * o ponowną akceptację. Musi być identyczna z frontendową stałą w
  * frontend/src/lib/terms.ts
  */
-export const CURRENT_TERMS_VERSION = '2026-07-01';
+export const CURRENT_TERMS_VERSION = '2026-09-10';
