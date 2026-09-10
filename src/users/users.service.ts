@@ -74,7 +74,8 @@ export class UsersService {
         const { count, error } = await supabase
             .from('users')
             .select('*', { count: 'exact', head: true })
-            .eq('company_id', companyId);
+            .eq('company_id', companyId)
+            .is('archived_at', null); // zarchiwizowani nie zajmują miejsca w planie
 
         if (error) return 0;
         return count || 0;
@@ -85,7 +86,24 @@ export class UsersService {
         const { data, error } = await supabase
             .from('users')
             .select('*')
-            .eq('company_id', companyId);
+            .eq('company_id', companyId)
+            .is('archived_at', null);
+
+        if (error) {
+            throw new InternalServerErrorException(error.message);
+        }
+        return data;
+    }
+
+    /** Pracownicy zarchiwizowani - ich ewidencja zostaje, ale nie mogą się logować. */
+    async findArchivedForCompany(companyId: string) {
+        const supabase = this.supabaseService.getClient();
+        const { data, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('company_id', companyId)
+            .not('archived_at', 'is', null)
+            .order('archived_at', { ascending: false });
 
         if (error) {
             throw new InternalServerErrorException(error.message);
@@ -154,27 +172,85 @@ export class UsersService {
         return data;
     }
 
-    async remove(id: string, companyId: string) {
+    /**
+     * Archiwizuje pracownika: profil i cała jego ewidencja czasu pracy zostają
+     * w systemie, ale znika on z list i traci możliwość logowania (konto w
+     * Supabase Auth jest usuwane).
+     *
+     * Twarde kasowanie profilu jest świadomie niedostępne - ewidencja czasu
+     * pracy musi być przechowywana, a usunięcie profilu pociągnęłoby ją za sobą.
+     */
+    async remove(id: string, companyId: string, actorId: string) {
         const supabase = this.supabaseService.getAdminClient();
-        
+
         const { data: user, error: fetchError } = await supabase
             .from('users')
-            .select('id')
+            .select('id, role, archived_at')
             .eq('id', id)
             .eq('company_id', companyId)
             .single();
-            
+
         if (fetchError || !user) {
             throw new ForbiddenException('Nie znaleziono użytkownika lub brak uprawnień');
         }
 
-        // Deletes the user completely. Ensure ON DELETE CASCADE is set on relations
-        const { error: deleteError } = await supabase.auth.admin.deleteUser(id);
-        
-        if (deleteError) {
-            throw new InternalServerErrorException(deleteError.message);
+        if (id === actorId) {
+            throw new ForbiddenException('Nie możesz zarchiwizować własnego konta.');
         }
 
-        return { success: true };
+        if (user.archived_at) {
+            return { success: true, alreadyArchived: true };
+        }
+
+        // Firma bez aktywnego administratora straciłaby dostęp do własnych danych.
+        if (user.role === 'admin') {
+            const { count, error: adminCountError } = await supabase
+                .from('users')
+                .select('*', { count: 'exact', head: true })
+                .eq('company_id', companyId)
+                .eq('role', 'admin')
+                .is('archived_at', null);
+
+            if (adminCountError) {
+                throw new InternalServerErrorException(adminCountError.message);
+            }
+
+            if ((count || 0) <= 1) {
+                throw new ForbiddenException(
+                    'Nie można zarchiwizować jedynego administratora firmy. Najpierw nadaj rolę administratora innej osobie.',
+                );
+            }
+        }
+
+        const archivedAt = new Date().toISOString();
+
+        const { error: archiveError } = await supabase
+            .from('users')
+            .update({ archived_at: archivedAt, archived_by: actorId })
+            .eq('id', id)
+            .eq('company_id', companyId);
+
+        if (archiveError) {
+            throw new InternalServerErrorException(archiveError.message);
+        }
+
+        // Odcięcie logowania. Robimy to po oznaczeniu profilu, żeby nieudane
+        // usunięcie konta w Auth dało się wycofać i nie zostawiło pracownika
+        // zarchiwizowanego, ale wciąż mogącego się zalogować.
+        const { error: deleteError } = await supabase.auth.admin.deleteUser(id);
+
+        if (deleteError) {
+            await supabase
+                .from('users')
+                .update({ archived_at: null, archived_by: null })
+                .eq('id', id)
+                .eq('company_id', companyId);
+
+            throw new InternalServerErrorException(
+                `Nie udało się odciąć dostępu do konta: ${deleteError.message}`,
+            );
+        }
+
+        return { success: true, archivedAt };
     }
 }

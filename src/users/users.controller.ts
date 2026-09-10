@@ -26,6 +26,12 @@ export class UsersController {
         return this.usersService.findAllForCompany(companyId);
     }
 
+    @Get('archived')
+    @Roles(Role.Admin)
+    findArchived(@Req() req) {
+        return this.usersService.findArchivedForCompany(req.user.company_id);
+    }
+
     @Patch('me/profile')
     // Każdy zalogowany może edytować swój profil (ograniczone pola w serwisie)
     updateSelf(@Body() updateUserDto: UpdateUserDto, @Req() req) {
@@ -40,9 +46,9 @@ export class UsersController {
     }
 
     @Delete(':id')
-    @Roles(Role.Admin) // Tylko Admin może usuwać pracowników
+    @Roles(Role.Admin) // Tylko Admin może archiwizować pracowników
     remove(@Param('id') id: string, @Req() req) {
         const companyId = req.user.company_id;
-        return this.usersService.remove(id, companyId);
+        return this.usersService.remove(id, companyId, req.user.id);
     }
 }

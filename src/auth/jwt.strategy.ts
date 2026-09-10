@@ -37,6 +37,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             throw new UnauthorizedException('Użytkownik nie znaleziony.');
         }
 
+        // Konto w Auth jest kasowane przy archiwizacji, ale wydany wcześniej token
+        // byłby ważny aż do wygaśnięcia - archiwizacja musi odcinać dostęp od razu.
+        if (user.archived_at) {
+            throw new UnauthorizedException('Konto zostało zarchiwizowane.');
+        }
+
         // Zwrócony obiekt zostanie dołączony do obiektu `request` jako `req.user`
         return user;
     }
