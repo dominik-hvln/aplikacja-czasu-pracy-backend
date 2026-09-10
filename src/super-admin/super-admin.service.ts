@@ -102,7 +102,7 @@ export class SuperAdminService {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
             .from('users')
-            .select('id, email, first_name, last_name, role, status, company_id, created_at')
+            .select('id, email, first_name, last_name, role, status, company_id, created_at, archived_at')
             .order('created_at', { ascending: false });
 
         if (error) {
