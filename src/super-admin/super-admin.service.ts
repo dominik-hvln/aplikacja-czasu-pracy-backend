@@ -213,7 +213,8 @@ export class SuperAdminService {
         if (usersErr) throw new InternalServerErrorException(usersErr.message);
         const userIds = (users || []).map((u: any) => u.id);
 
-        // 2. Usuń konta Auth (kasuje też public.users dzięki ON DELETE CASCADE)
+        // 2. Usuń konta Auth. Uwaga: od migracji add_user_archiving.sql nie ma już
+        //    kaskady auth.users -> public.users, więc profile sprząta dopiero krok 3.
         const authErrors: string[] = [];
         for (const uid of userIds) {
             try {
@@ -229,7 +230,8 @@ export class SuperAdminService {
             this.logger.warn(`Usuwanie firmy ${companyId}: błędy kont Auth: ${authErrors.join('; ')}`);
         }
 
-        // 3. Posprzątaj ewentualne pozostałe wiersze users (gdyby brakło konta Auth/kaskady)
+        // 3. Usuń profile pracowników. Po zdjęciu kaskady to jest krok, który
+        //    faktycznie kasuje wiersze w public.users - nie tylko zabezpieczenie.
         await admin.from('users').delete().eq('company_id', companyId);
 
         // 4. Usuń firmę (reszta danych firmowych znika kaskadowo)
