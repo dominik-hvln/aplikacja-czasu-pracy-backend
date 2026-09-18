@@ -304,6 +304,7 @@ export class SchedulesService {
                      start_time: targetShift.start_time,
                      end_time: targetShift.end_time,
                      status: userAbsent ? getAbsenceScheduleStatus(userAbsent.type) : 'scheduled',
+                     absence_type: userAbsent ? userAbsent.type : null,
                      requires_replacement: false,
                      generated_at: generatedAt,
                  });
@@ -377,6 +378,7 @@ export class SchedulesService {
                 .from('schedules')
                 .update({
                     status: absenceStatus,
+                    absence_type: absence.type,
                     requires_replacement: requiresReplacement,
                 })
                 .eq('id', schedule.id);
@@ -447,7 +449,7 @@ export class SchedulesService {
 
         const { error: updateError } = await supabase
             .from('schedules')
-            .update({ status: 'scheduled', requires_replacement: false })
+            .update({ status: 'scheduled', absence_type: null, requires_replacement: false })
             .in('id', idsToRevert);
 
         if (updateError) throw new InternalServerErrorException(updateError.message);
@@ -467,7 +469,10 @@ export class SchedulesService {
         if (updateDto.user_id) updateData.user_id = updateDto.user_id;
 
         if (updateDto.user_id) {
+             // Zmiana przepisana na kogoś innego to zwykła zmiana - nieobecność
+             // poprzedniej osoby nie może się przykleić do zastępstwa.
              updateData.status = 'scheduled';
+             updateData.absence_type = null;
              updateData.requires_replacement = false;
         }
 
