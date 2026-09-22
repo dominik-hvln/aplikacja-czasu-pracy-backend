@@ -5,6 +5,9 @@ import { GenerateScheduleDto, UpdateScheduleDto, UpdateSettingsDto, CreateShiftR
 import { startOfMonth, endOfMonth, eachDayOfInterval, getDay, format, parseISO, subDays } from 'date-fns';
 import { getAbsenceScheduleStatus } from '../time-entries/time-entry.utils';
 
+/** Statusy zmiany oznaczające nieobecność (ustawiane po akceptacji wniosku). */
+const ABSENCE_SCHEDULE_STATUSES = ['on_leave', 'sick_leave', 'replacement_needed'];
+
 @Injectable()
 export class SchedulesService {
     private readonly logger = new Logger(SchedulesService.name);
@@ -13,6 +16,104 @@ export class SchedulesService {
         private readonly supabaseService: SupabaseService,
         private readonly holidaysService: HolidaysService
     ) {}
+
+    /** Czy firma pracuje w weekendy / święta (ustawienia firmy). */
+    async getWorkCalendarFlags(companyId: string): Promise<{ workOnWeekends: boolean; workOnHolidays: boolean }> {
+        const { data } = await this.supabaseService
+            .getClient()
+            .from('companies')
+            .select('work_on_weekends, schedule_on_holidays')
+            .eq('id', companyId)
+            .maybeSingle();
+        return {
+            workOnWeekends: data?.work_on_weekends === true,
+            workOnHolidays: data?.schedule_on_holidays === true,
+        };
+    }
+
+    /**
+     * Nieobecności do nałożenia na grafik: pracownik × dzień, BEZ rodzaju i powodu.
+     * Grafik i jego wydruki pokazują jeden wspólny znak — współpracownicy nie mogą
+     * się z nich dowiedzieć, czy ktoś jest na urlopie, czy na L4.
+     *
+     * Zwraca też wnioski oczekujące (pending), żeby manager widział planowane braki.
+     * Pracownik dostaje wyłącznie własne nieobecności.
+     */
+    async getScheduleOverlay(
+        context: { userId: string; role: string; companyId: string },
+        month: number,
+        year: number,
+        departmentId?: string,
+    ) {
+        const supabase = this.supabaseService.getClient();
+        const flags = await this.getWorkCalendarFlags(context.companyId);
+
+        const m = Number(month);
+        const y = Number(year);
+        if (!m || !y) return { ...flags, absences: [] };
+
+        const monthStart = new Date(y, m - 1, 1);
+        const startStr = format(monthStart, 'yyyy-MM-dd');
+        const endStr = format(endOfMonth(monthStart), 'yyyy-MM-dd');
+
+        let query = supabase
+            .from('absences')
+            .select('user_id, start_date, end_date, status')
+            .eq('company_id', context.companyId)
+            .in('status', ['approved', 'pending'])
+            .lte('start_date', endStr)
+            .gte('end_date', startStr);
+
+        const isStaff = context.role === 'admin' || context.role === 'manager';
+        if (!isStaff) {
+            query = query.eq('user_id', context.userId);
+        } else if (departmentId) {
+            const { data: deptUsers } = await supabase
+                .from('users')
+                .select('id')
+                .eq('company_id', context.companyId)
+                .eq('department_id', departmentId);
+            const ids = (deptUsers || []).map((u: any) => u.id);
+            if (ids.length === 0) return { ...flags, absences: [] };
+            query = query.in('user_id', ids);
+        }
+
+        const { data: absences, error } = await query;
+        if (error) throw new InternalServerErrorException(error.message);
+        if (!absences || absences.length === 0) return { ...flags, absences: [] };
+
+        const userIds = [...new Set(absences.map((a: any) => a.user_id))];
+        const { data: users } = await supabase
+            .from('users')
+            .select('id, first_name, last_name')
+            .in('id', userIds);
+        const userMap = new Map((users || []).map((u: any) => [u.id, u]));
+
+        // Rozwinięcie do pojedynczych dni; zaakceptowana nieobecność wygrywa z oczekującą.
+        const byDay = new Map<string, any>();
+        for (const a of absences) {
+            const from = a.start_date < startStr ? startStr : a.start_date;
+            const to = a.end_date > endStr ? endStr : a.end_date;
+            if (from > to) continue;
+            const u: any = userMap.get(a.user_id);
+            for (const d of eachDayOfInterval({ start: parseISO(from), end: parseISO(to) })) {
+                const date = format(d, 'yyyy-MM-dd');
+                const key = `${a.user_id}|${date}`;
+                const pending = a.status !== 'approved';
+                const existing = byDay.get(key);
+                if (existing && !existing.pending) continue;
+                byDay.set(key, {
+                    user_id: a.user_id,
+                    date,
+                    pending,
+                    first_name: u?.first_name || '',
+                    last_name: u?.last_name || '',
+                });
+            }
+        }
+
+        return { ...flags, absences: [...byDay.values()] };
+    }
 
     // --- Settings ---
     async getSettings(companyId: string, departmentId: string) {
@@ -141,6 +242,7 @@ export class SchedulesService {
     async generateSchedule(companyId: string, departmentId: string, month: number, year: number) {
         const supabase = this.supabaseService.getClient();
         const settings = await this.getSettings(companyId, departmentId);
+        const { workOnWeekends, workOnHolidays } = await this.getWorkCalendarFlags(companyId);
 
         // Fetch all active users in the company for this department
         const { data: users, error: usersErr } = await supabase
@@ -209,18 +311,6 @@ export class SchedulesService {
         // Load holidays
         const mergedHolidays = await this.getMergedHolidays(companyId, departmentId, year, month);
 
-        // Czy firma pracuje w święta? Hotele/gastronomia działają 365 dni w roku,
-        // więc pomijanie świąt musi być decyzją firmy, a nie regułą wpisaną na sztywno.
-        const { data: company, error: companyErr } = await supabase
-            .from('companies')
-            .select('schedule_on_holidays')
-            .eq('id', companyId)
-            .maybeSingle();
-
-        if (companyErr) throw new InternalServerErrorException(companyErr.message);
-
-        const scheduleOnHolidays = company?.schedule_on_holidays === true;
-
         // Divide employees into groups based on max shifts available in the week to balance them
         // First gather all unique shifts in the settings
         const allShiftNames = new Set<string>();
@@ -250,6 +340,11 @@ export class SchedulesService {
                  const dailySettings = settings[dayStr];
                  if (!dailySettings || !dailySettings.is_working_day || !dailySettings.shifts || dailySettings.shifts.length === 0) {
                      continue; // Not a working day, skip
+                 }
+
+                 // Firma nie pracuje w weekendy — sob./nd. wolne niezależnie od ustawień działu.
+                 if (!workOnWeekends && (dow === 0 || dow === 6)) {
+                     continue;
                  }
 
                  // Group rotation on Monday
@@ -288,9 +383,9 @@ export class SchedulesService {
                      dateStr >= a.start_date && dateStr <= a.end_date
                  );
 
-                 // Check for holidays — pomijamy tylko wtedy, gdy firma nie pracuje w święta
+                 // Święto: dzień wolny, chyba że firma pracuje w święta.
                  const isHoliday = mergedHolidays.find(h => h.date === dateStr);
-                 if (isHoliday && !scheduleOnHolidays) {
+                 if (isHoliday && !workOnHolidays) {
                      continue;
                  }
 
@@ -400,21 +495,31 @@ export class SchedulesService {
     }
 
     /**
-     * Odwrotność applyApprovedAbsence: gdy zaakceptowany wniosek zostaje usunięty,
-     * pozycje grafiku muszą wrócić do zwykłej zmiany. Bez tego pracownik miałby
-     * na grafiku "URLOP" mimo braku urlopu.
-     *
-     * Dni pokryte innym, wciąż zaakceptowanym wnioskiem zostają nietknięte.
+     * Odwrotność applyApprovedAbsence: po odrzuceniu lub usunięciu zaakceptowanego
+     * wniosku przywraca zmiany w grafiku do stanu „zaplanowana”. Dni pokryte innym
+     * zaakceptowanym wnioskiem zostają nietknięte.
      */
-    async revertAbsenceFromSchedule(
+    async revertAbsence(
         companyId: string,
         absence: { id: string; user_id: string; start_date: string; end_date: string },
     ) {
         const supabase = this.supabaseService.getClient();
 
-        const { data: otherAbsences, error: othersError } = await supabase
+        const { data: schedules, error } = await supabase
+            .from('schedules')
+            .select('id, date')
+            .eq('company_id', companyId)
+            .eq('user_id', absence.user_id)
+            .in('status', ABSENCE_SCHEDULE_STATUSES)
+            .gte('date', absence.start_date)
+            .lte('date', absence.end_date);
+
+        if (error) throw new InternalServerErrorException(error.message);
+        if (!schedules || schedules.length === 0) return { reverted: 0 };
+
+        const { data: otherAbsences } = await supabase
             .from('absences')
-            .select('start_date, end_date')
+            .select('id, start_date, end_date')
             .eq('company_id', companyId)
             .eq('user_id', absence.user_id)
             .eq('status', 'approved')
@@ -422,37 +527,19 @@ export class SchedulesService {
             .lte('start_date', absence.end_date)
             .gte('end_date', absence.start_date);
 
-        if (othersError) throw new InternalServerErrorException(othersError.message);
+        const stillAbsent = (date: string) =>
+            (otherAbsences || []).some((a: any) => date >= a.start_date && date <= a.end_date);
 
-        const { data: schedules, error } = await supabase
-            .from('schedules')
-            .select('id, date, status')
-            .eq('company_id', companyId)
-            .eq('user_id', absence.user_id)
-            .gte('date', absence.start_date)
-            .lte('date', absence.end_date)
-            .in('status', ['on_leave', 'sick_leave']);
+        const ids = schedules.filter((s: any) => !stillAbsent(s.date)).map((s: any) => s.id);
+        if (ids.length === 0) return { reverted: 0 };
 
-        if (error) throw new InternalServerErrorException(error.message);
-        if (!schedules || schedules.length === 0) return { reverted: 0 };
-
-        const stillCovered = (date: string) =>
-            (otherAbsences || []).some((a) => date >= a.start_date && date <= a.end_date);
-
-        const idsToRevert = schedules
-            .filter((s) => !stillCovered(s.date))
-            .map((s) => s.id);
-
-        if (idsToRevert.length === 0) return { reverted: 0 };
-
-        const { error: updateError } = await supabase
+        const { error: updateErr } = await supabase
             .from('schedules')
             .update({ status: 'scheduled', requires_replacement: false })
-            .in('id', idsToRevert);
+            .in('id', ids);
+        if (updateErr) throw new InternalServerErrorException(updateErr.message);
 
-        if (updateError) throw new InternalServerErrorException(updateError.message);
-
-        return { reverted: idsToRevert.length };
+        return { reverted: ids.length };
     }
 
     async updateSchedule(id: string, companyId: string, updateDto: UpdateScheduleDto) {
@@ -581,14 +668,30 @@ export class SchedulesService {
             
             if (deptId) {
                  const settings = await this.getSettings(companyId, deptId);
+                 const { workOnWeekends, workOnHolidays } = await this.getWorkCalendarFlags(companyId);
+
+                 // Święta ze wszystkich miesięcy, których dotyczy dyspozycja.
+                 const holidayDates = new Set<string>();
+                 if (!workOnHolidays) {
+                     const months = new Set(daysToApply.map((d) => `${d.getFullYear()}-${d.getMonth() + 1}`));
+                     for (const ym of months) {
+                         const [y, m] = ym.split('-').map(Number);
+                         const merged = await this.getMergedHolidays(companyId, deptId, y, m);
+                         merged.forEach((h: any) => holidayDates.add(h.date));
+                     }
+                 }
+
                  const newSchedules: any[] = [];
-                 
+
                  for (const day of daysToApply) {
                      const dateStr = format(day, 'yyyy-MM-dd');
-                     const dayStr = String(getDay(day));
+                     const dow = getDay(day);
+                     const dayStr = String(dow);
                      const dailySettings = settings[dayStr];
-                     
+
                      if (!dailySettings || !dailySettings.is_working_day || !dailySettings.shifts) continue;
+                     if (!workOnWeekends && (dow === 0 || dow === 6)) continue;
+                     if (holidayDates.has(dateStr)) continue;
                      
                      const targetShift = dailySettings.shifts.find((s: any) => s.name === reqData.requested_shift_name);
                      if (!targetShift) continue;

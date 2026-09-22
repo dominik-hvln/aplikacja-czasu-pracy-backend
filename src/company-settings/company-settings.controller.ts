@@ -26,6 +26,7 @@ export class CompanySettingsController {
       schedule_on_holidays?: boolean;
       night_start?: string;
       night_end?: string;
+      work_on_weekends?: boolean;
     },
   ) {
     return this.companySettingsService.updateWorkSettings(req.user.company_id, body);

@@ -1,8 +1,9 @@
-import { IsString, IsNotEmpty, IsDateString, IsOptional, IsUUID } from 'class-validator';
+import { IsString, IsNotEmpty, IsDateString, IsOptional, IsIn } from 'class-validator';
+import { ABSENCE_TYPES } from '../absence-types';
 
 export class CreateAbsenceDto {
     @IsString()
-    @IsNotEmpty()
+    @IsIn(ABSENCE_TYPES, { message: 'Nieznany rodzaj nieobecności.' })
     type: string;
 
     @IsDateString()
@@ -20,6 +21,6 @@ export class CreateAbsenceDto {
 
 export class UpdateAbsenceStatusDto {
     @IsString()
-    @IsNotEmpty()
+    @IsIn(['pending', 'approved', 'rejected'])
     status: 'pending' | 'approved' | 'rejected';
 }

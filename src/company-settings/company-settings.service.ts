@@ -21,7 +21,7 @@ export class CompanySettingsService {
         const supabase = this.supabaseService.getClient();
         const { data, error } = await supabase
             .from('companies')
-            .select('daily_norm_hours, count_holidays_as_work, schedule_on_holidays, night_start, night_end')
+            .select('daily_norm_hours, count_holidays_as_work, schedule_on_holidays, night_start, night_end, work_on_weekends')
             .eq('id', companyId)
             .maybeSingle();
         if (error) throw new InternalServerErrorException(error.message);
@@ -33,6 +33,7 @@ export class CompanySettingsService {
             schedule_on_holidays: data?.schedule_on_holidays === true,
             night_start: toHHmm(data?.night_start, DEFAULT_NIGHT_START),
             night_end: toHHmm(data?.night_end, DEFAULT_NIGHT_END),
+            work_on_weekends: data?.work_on_weekends === true,
         };
     }
 
@@ -44,6 +45,7 @@ export class CompanySettingsService {
             schedule_on_holidays?: boolean;
             night_start?: string;
             night_end?: string;
+            work_on_weekends?: boolean;
         },
     ) {
         const updates: any = {};
@@ -59,6 +61,9 @@ export class CompanySettingsService {
         }
         if (dto.schedule_on_holidays !== undefined) {
             updates.schedule_on_holidays = Boolean(dto.schedule_on_holidays);
+        }
+        if (dto.work_on_weekends !== undefined) {
+            updates.work_on_weekends = Boolean(dto.work_on_weekends);
         }
 
         const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/;

@@ -38,6 +38,22 @@ export class SchedulesController {
         }, month, year, departmentId);
     }
 
+    /** Nieobecności do nałożenia na grafik (bez rodzaju i powodu) + ustawienia weekendów/świąt. */
+    @Get('overlay')
+    getScheduleOverlay(
+        @Req() req,
+        @Query('month') month: number,
+        @Query('year') year: number,
+        @Query('departmentId') departmentId?: string,
+    ) {
+        return this.schedulesService.getScheduleOverlay(
+            { userId: req.user.id, role: req.user.role, companyId: req.user.company_id },
+            month,
+            year,
+            departmentId,
+        );
+    }
+
     @Post()
     @Roles(Role.Admin, Role.Manager)
     createSchedule(@Req() req, @Body() createDto: CreateScheduleDto) {

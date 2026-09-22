@@ -255,6 +255,95 @@ describe('getMonthlyReport', () => {
         expect(result.nightEnd).toBe('06:00');
     });
 
+    it('nowe rodzaje nieobecności mają własne literki i liczą się do sumy (także bezpłatny)', async () => {
+        const tables = baseTables();
+        tables.absences = [
+            { user_id: USER_ID, start_date: '2026-08-03', end_date: '2026-08-03', type: 'urlop_okolicznosciowy' },
+            { user_id: USER_ID, start_date: '2026-08-04', end_date: '2026-08-04', type: 'opieka' },
+            { user_id: USER_ID, start_date: '2026-08-05', end_date: '2026-08-05', type: 'urlop_bezplatny' },
+        ];
+
+        const { row } = await report(tables);
+
+        expect(row.cells['2026-08-03'].code).toBe('UO');
+        expect(row.cells['2026-08-04'].code).toBe('OP');
+        expect(row.cells['2026-08-05'].code).toBe('UB');
+        expect(row.totals.otherAbsenceDays).toBe(3);
+        expect(row.totals.vacationDays).toBe(0); // pula urlopu wypoczynkowego = tylko U i NŻ
+        expect(row.totals.absenceMinutes).toBe(3 * 480);
+    });
+
+    describe('ustawienia firmy: praca w weekendy', () => {
+        // Dział z sobotą jako dniem roboczym (6h), niedziela wolna.
+        const withSaturdayDept = (workOnWeekends: boolean) => {
+            const tables = baseTables();
+            tables.companies[0].work_on_weekends = workOnWeekends;
+            tables.users[0].department_id = 'dept-1';
+            const weekday = { is_working_day: true, shifts: [{ start_time: '08:00', end_time: '16:00' }] };
+            tables.departments = [
+                {
+                    id: 'dept-1',
+                    schedule_settings: {
+                        '1': weekday, '2': weekday, '3': weekday, '4': weekday, '5': weekday,
+                        '6': { is_working_day: true, shifts: [{ start_time: '08:00', end_time: '14:00' }] },
+                        '0': { is_working_day: false, shifts: [] },
+                    },
+                },
+            ];
+            // 2026-08-07 (pt) – 2026-08-08 (sob)
+            tables.absences = [
+                { user_id: USER_ID, start_date: '2026-08-07', end_date: '2026-08-08', type: 'urlop_wypoczynkowy' },
+            ];
+            return tables;
+        };
+
+        it('włączona: sobota robocza w dziale liczy się jako dzień urlopu', async () => {
+            const { row } = await report(withSaturdayDept(true));
+
+            expect(row.cells['2026-08-08']).toMatchObject({ code: 'U', absenceMinutes: 360 });
+            expect(row.totals.vacationDays).toBe(2);
+            expect(row.totals.absenceMinutes).toBe(480 + 360);
+        });
+
+        it('wyłączona: sobota jest wolna, nawet jeśli dział ma ją jako roboczą', async () => {
+            const { row } = await report(withSaturdayDept(false));
+
+            expect(row.cells['2026-08-08']).toBeUndefined();
+            expect(row.totals.vacationDays).toBe(1);
+            expect(row.totals.absenceMinutes).toBe(480);
+        });
+    });
+
+    describe('ustawienia firmy: praca w święta', () => {
+        it('włączona: święto nie jest automatycznie doliczane, liczy się tylko praca', async () => {
+            const tables = baseTables();
+            tables.companies[0].schedule_on_holidays = true;
+            tables.company_holidays = [{ date: '2026-08-05' }];
+            tables.time_entries = [entry('2026-08-05', '08:00', '2026-08-05', '14:00')];
+
+            const { row } = await report(tables);
+
+            expect(row.cells['2026-08-05']).toMatchObject({ dayMinutes: 360, code: null });
+            expect(row.totals.holidayMinutes).toBe(0);
+            expect(row.totals.holidayDays).toBe(0);
+            expect(row.totals.totalMinutes).toBe(360);
+        });
+
+        it('włączona: urlop w święto zużywa dzień urlopu jak w zwykły dzień pracy', async () => {
+            const tables = baseTables();
+            tables.companies[0].schedule_on_holidays = true;
+            tables.company_holidays = [{ date: '2026-08-05' }];
+            tables.absences = [
+                { user_id: USER_ID, start_date: '2026-08-05', end_date: '2026-08-05', type: 'urlop_wypoczynkowy' },
+            ];
+
+            const { row } = await report(tables);
+
+            expect(row.cells['2026-08-05'].code).toBe('U');
+            expect(row.totals.vacationDays).toBe(1);
+        });
+    });
+
     it('odrzuca nieprawidłowy miesiąc', async () => {
         const service = makeService(baseTables());
         await expect(

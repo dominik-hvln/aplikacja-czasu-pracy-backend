@@ -122,6 +122,9 @@ export class AbsencesService {
                 end_date: data.end_date,
                 reviewed_at: reviewedAt,
             });
+        } else if (absence.status === 'approved') {
+            // Wycofanie wcześniej zaakceptowanego wniosku — grafik wraca do zaplanowanych zmian.
+            await this.schedulesService.revertAbsence(user.companyId, data);
         }
 
         return data;
@@ -129,24 +132,35 @@ export class AbsencesService {
 
     async remove(id: string, user: any) {
         const supabase = this.supabaseService.getClient();
-        const { data: absence } = await supabase.from('absences').select('*').eq('id', id).single();
-        
-        if (!absence || (absence.user_id !== user.id && user.role === 'employee')) {
-             throw new ForbiddenException('Nie możesz usunąć tego wniosku');
+        const { data: absence } = await supabase
+            .from('absences')
+            .select('*')
+            .eq('id', id)
+            .eq('company_id', user.companyId)
+            .maybeSingle();
+
+        if (!absence) {
+            throw new NotFoundException('Nie znaleziono zgłoszenia');
         }
 
-        const { error } = await supabase.from('absences').delete().eq('id', id);
+        if (user.role === 'employee') {
+            // Pracownik może wycofać tylko własny, jeszcze nierozpatrzony wniosek.
+            if (absence.user_id !== user.id || absence.status !== 'pending') {
+                throw new ForbiddenException('Możesz anulować tylko własny wniosek oczekujący na akceptację');
+            }
+        }
+
+        const { error } = await supabase
+            .from('absences')
+            .delete()
+            .eq('id', id)
+            .eq('company_id', user.companyId);
         if (error) throw new InternalServerErrorException(error.message);
 
         // Zaakceptowany wniosek zdążył już oznaczyć pozycje grafiku jako urlop -
         // po jego usunięciu muszą wrócić do zwykłej zmiany.
         if (absence.status === 'approved') {
-            await this.schedulesService.revertAbsenceFromSchedule(absence.company_id, {
-                id: absence.id,
-                user_id: absence.user_id,
-                start_date: absence.start_date,
-                end_date: absence.end_date,
-            });
+            await this.schedulesService.revertAbsence(user.companyId, absence);
         }
 
         return { success: true };

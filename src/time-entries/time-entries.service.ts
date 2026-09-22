@@ -34,6 +34,7 @@ import {
     format,
 } from 'date-fns';
 import { HolidaysService } from '../schedules/holidays.service';
+import { AbsenceCode, absenceCodeFor } from '../absences/absence-types';
 
 interface TargetUser {
     multiplier: number;
@@ -43,14 +44,7 @@ interface TargetUser {
 }
 
 /** Oznaczenia dni bez pracy, które mimo to wliczają się do sumy godzin. */
-export type AbsenceCode = 'U' | 'NŻ' | 'L4' | 'I' | 'ŚW';
-
-const ABSENCE_CODES: Record<string, AbsenceCode> = {
-    urlop_wypoczynkowy: 'U',
-    urlop_na_zadanie: 'NŻ',
-    l4: 'L4',
-    inne: 'I',
-};
+export type DayCode = AbsenceCode | 'ŚW';
 
 export interface DailyCell {
     /** Godziny przepracowane poza porą nocną (minuty). */
@@ -60,7 +54,7 @@ export interface DailyCell {
     /** Godziny doliczone z tytułu nieobecności lub święta (minuty). */
     absenceMinutes: number;
     /** Literka nieobecności/święta — null dla dnia przepracowanego. */
-    code: AbsenceCode | null;
+    code: DayCode | null;
 }
 
 @Injectable()
@@ -490,7 +484,8 @@ export class TimeEntriesService {
      * Zasady:
      *  - wpis rozliczany jest w całości w dniu ROZPOCZĘCIA (także zmiana przez północ),
      *  - dzień przepracowany ma pierwszeństwo — nie dokładamy do niego godzin z urlopu,
-     *  - święto ma pierwszeństwo przed nieobecnością,
+     *  - święto ma pierwszeństwo przed nieobecnością (gdy firma nie pracuje w święta),
+     *  - weekend jest dniem roboczym tylko, gdy firma pracuje w weekendy i dział ma go jako roboczy,
      *  - godziny nieobecności: z grafiku (jeśli jest wiersz), inaczej wg zmian działu × etat.
      *
      * Wspólny dla podsumowania na ekranie i raportu miesięcznego, żeby obie liczby
@@ -513,13 +508,17 @@ export class TimeEntriesService {
 
         const { data: company } = await supabase
             .from('companies')
-            .select('daily_norm_hours, count_holidays_as_work, night_start, night_end')
+            .select('daily_norm_hours, count_holidays_as_work, night_start, night_end, work_on_weekends, schedule_on_holidays')
             .eq('id', companyId)
             .maybeSingle();
 
         // Norma dobowa = fallback, gdy dzień jest roboczy, ale nie ma zdefiniowanych godzin zmiany.
         const fallbackMinutes = Math.round(Number(company?.daily_norm_hours ?? 8) * 60);
         const countHolidays = company?.count_holidays_as_work !== false;
+        // Firma bez pracy w weekendy: sob./nd. nigdy nie są dniami roboczymi (także dla urlopów).
+        const workOnWeekends = company?.work_on_weekends === true;
+        // Firma pracująca w święta: święto to zwykły dzień, bez automatycznego doliczania godzin.
+        const workOnHolidays = company?.schedule_on_holidays === true;
         const nightStart = normalizeTimeStr(company?.night_start || DEFAULT_NIGHT_START).substring(0, 5);
         const nightEnd = normalizeTimeStr(company?.night_end || DEFAULT_NIGHT_END).substring(0, 5);
 
@@ -581,7 +580,7 @@ export class TimeEntriesService {
             });
         }
 
-        // 3) Zaakceptowane wnioski o nieobecność — dają literkę wg typu (U / NŻ / L4 / I).
+        // 3) Zaakceptowane wnioski o nieobecność — dają literkę wg rodzaju (patrz absence-types.ts).
         let absQuery = supabase
             .from('absences')
             .select('user_id, start_date, end_date, type')
@@ -609,7 +608,8 @@ export class TimeEntriesService {
         for (const day of days) {
             const dow = getDay(day); // 0 = niedziela ... 6 = sobota
             const dateStr = format(day, 'yyyy-MM-dd');
-            const isHoliday = holidaySet.has(dateStr);
+            const isHoliday = !workOnHolidays && holidaySet.has(dateStr);
+            const isClosedWeekend = !workOnWeekends && (dow === 0 || dow === 6);
 
             for (const [uid, u] of users) {
                 const key = `${uid}|${dateStr}`;
@@ -620,7 +620,9 @@ export class TimeEntriesService {
                     continue;
                 }
 
-                const expected = this.expectedMinutesForDay(deptSettings, u.departmentId, dow, fallbackMinutes);
+                const expected = isClosedWeekend
+                    ? 0
+                    : this.expectedMinutesForDay(deptSettings, u.departmentId, dow, fallbackMinutes);
                 const normMinutes = Math.round(expected * u.multiplier);
 
                 if (isHoliday) {
@@ -641,7 +643,7 @@ export class TimeEntriesService {
 
                 if (scheduled) {
                     const code: AbsenceCode = absenceType
-                        ? (ABSENCE_CODES[absenceType] ?? 'I')
+                        ? absenceCodeFor(absenceType)
                         : scheduled.status === 'sick_leave'
                             ? 'L4'
                             : 'U';
@@ -659,7 +661,7 @@ export class TimeEntriesService {
                         dayMinutes: 0,
                         nightMinutes: 0,
                         absenceMinutes: normMinutes,
-                        code: ABSENCE_CODES[absenceType] ?? 'I',
+                        code: absenceCodeFor(absenceType),
                     });
                 }
             }
