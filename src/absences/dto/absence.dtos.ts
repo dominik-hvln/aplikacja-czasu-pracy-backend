@@ -24,3 +24,13 @@ export class UpdateAbsenceStatusDto {
     @IsIn(['pending', 'approved', 'rejected'])
     status: 'pending' | 'approved' | 'rejected';
 }
+
+export class UpdateAbsenceDatesDto {
+    @IsDateString()
+    @IsNotEmpty()
+    startDate: string;
+
+    @IsDateString()
+    @IsNotEmpty()
+    endDate: string;
+}

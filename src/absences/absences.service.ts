@@ -1,6 +1,6 @@
-import { Injectable, InternalServerErrorException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { CreateAbsenceDto, UpdateAbsenceStatusDto } from './dto/absence.dtos';
+import { CreateAbsenceDto, UpdateAbsenceStatusDto, UpdateAbsenceDatesDto } from './dto/absence.dtos';
 import { SchedulesService } from '../schedules/schedules.service';
 
 @Injectable()
@@ -53,13 +53,22 @@ export class AbsencesService {
             .select('id, first_name, last_name, role, manager_id')
             .eq('company_id', user.companyId);
 
+        const { data: changes } = await supabase
+            .from('absence_date_changes')
+            .select('*')
+            .eq('company_id', user.companyId)
+            .order('created_at', { ascending: true });
+
         let mergedData = absences.map(a => {
             const currentU = users?.find(u => u.id === a.user_id);
             const reviewerU = users?.find(u => u.id === a.reviewed_by);
             return {
                 ...a,
                 user: currentU || null,
-                reviewer: reviewerU || null
+                reviewer: reviewerU || null,
+                date_changes: (changes || [])
+                    .filter(c => c.absence_id === a.id)
+                    .map(c => ({ ...c, changer: users?.find(u => u.id === c.changed_by) || null })),
             };
         });
 
@@ -126,6 +135,57 @@ export class AbsencesService {
             // Wycofanie wcześniej zaakceptowanego wniosku — grafik wraca do zaplanowanych zmian.
             await this.schedulesService.revertAbsence(user.companyId, data);
         }
+
+        return data;
+    }
+
+    /** Admin ręcznie zmienia termin zaakceptowanego urlopu; grafik jest przeliczany na nowy zakres. */
+    async updateDates(id: string, companyId: string, adminId: string, dto: UpdateAbsenceDatesDto) {
+        if (dto.endDate < dto.startDate) {
+            throw new BadRequestException('Data końcowa nie może być przed początkową.');
+        }
+
+        const supabase = this.supabaseService.getClient();
+        const { data: absence } = await supabase
+            .from('absences')
+            .select('*')
+            .eq('id', id)
+            .eq('company_id', companyId)
+            .maybeSingle();
+
+        if (!absence) throw new NotFoundException('Nie znaleziono zgłoszenia');
+        if (absence.status !== 'approved') {
+            throw new BadRequestException('Termin można zmienić tylko w zaakceptowanym wniosku');
+        }
+
+        const { data, error } = await supabase
+            .from('absences')
+            .update({ start_date: dto.startDate, end_date: dto.endDate })
+            .eq('id', id)
+            .select()
+            .single();
+        if (error) throw new InternalServerErrorException(error.message);
+
+        const { error: logError } = await supabase.from('absence_date_changes').insert({
+            absence_id: id,
+            company_id: companyId,
+            changed_by: adminId,
+            old_start_date: absence.start_date,
+            old_end_date: absence.end_date,
+            new_start_date: dto.startDate,
+            new_end_date: dto.endDate,
+        });
+        if (logError) throw new InternalServerErrorException(logError.message);
+
+        // Stary zakres wraca do „zaplanowana", nowy zostaje oznaczony jako nieobecność.
+        await this.schedulesService.revertAbsence(companyId, absence);
+        await this.schedulesService.applyApprovedAbsence(companyId, {
+            user_id: data.user_id,
+            type: data.type,
+            start_date: data.start_date,
+            end_date: data.end_date,
+            reviewed_at: data.reviewed_at,
+        });
 
         return data;
     }

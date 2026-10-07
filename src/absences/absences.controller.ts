@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
 import { AbsencesService } from './absences.service';
-import { CreateAbsenceDto, UpdateAbsenceStatusDto } from './dto/absence.dtos';
+import { CreateAbsenceDto, UpdateAbsenceStatusDto, UpdateAbsenceDatesDto } from './dto/absence.dtos';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles, Role } from '../auth/roles.decorator';
@@ -32,6 +32,12 @@ export class AbsencesController {
         @Body() updateDto: UpdateAbsenceStatusDto
     ) {
         return this.absencesService.updateStatus(id, { id: req.user.id, role: req.user.role, companyId: req.user.company_id }, updateDto);
+    }
+
+    @Patch(':id/dates')
+    @Roles(Role.Admin)
+    updateDates(@Param('id') id: string, @Req() req, @Body() dto: UpdateAbsenceDatesDto) {
+        return this.absencesService.updateDates(id, req.user.company_id, req.user.id, dto);
     }
 
     @Delete(':id')
